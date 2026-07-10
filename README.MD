@@ -52,6 +52,8 @@ python -c "import tkinter; print('Tk', tkinter.TclVersion)"
 python main.py
 ```
 
+Games are auto-recorded to `saves/game_YYYYMMDD_HHMMSS.db` when a simulation starts. Use **Save Game** on the Commentary tab to export a copy elsewhere.
+
 ## Run tests
 
 ```bash

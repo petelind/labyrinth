@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-timeout>=2.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -27,4 +28,5 @@ include = ["labyrinth*"]
 testpaths = ["tests"]
 markers = [
     "integration: integration tests requiring OLLAMA and real services",
+    "gui: Tkinter E2E tests (require display)",
 ]

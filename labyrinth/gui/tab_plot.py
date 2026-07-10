@@ -19,10 +19,17 @@ CIV_PALETTES: tuple[dict[str, str], ...] = (
 class PlotTab(ttk.Frame):
     """Spectator plot tab with actual labyrinth and per-civ uncovered maps."""
 
-    def __init__(self, master, labyrinth: Labyrinth, civilizations: list) -> None:
+    def __init__(
+        self,
+        master,
+        labyrinth: Labyrinth,
+        civilizations: list,
+        auto_advance_ms: int = 1500,
+    ) -> None:
         super().__init__(master)
         self._labyrinth = labyrinth
         self._civ_states = civilizations
+        self._auto_advance_ms = auto_advance_ms
         self._turn_var = tk.StringVar(value="Turn 0")
         self._epoch_var = tk.StringVar(value="Epoch: —")
         self._status_var = tk.StringVar(value="")
@@ -169,7 +176,7 @@ class PlotTab(ttk.Frame):
             or not self._next_turn_callback
         ):
             return
-        self._auto_after_id = self.after(1500, self._auto_advance_tick)
+        self._auto_after_id = self.after(self._auto_advance_ms, self._auto_advance_tick)
 
     def _auto_advance_tick(self) -> None:
         self._auto_after_id = None
@@ -284,6 +291,41 @@ class PlotTab(ttk.Frame):
                     fill=color,
                     outline="",
                 )
+
+    @property
+    def turn_label(self) -> tk.StringVar:
+        """Turn counter label variable (for E2E assertions)."""
+        return self._turn_var
+
+    @property
+    def epoch_label(self) -> tk.StringVar:
+        """Epoch label variable."""
+        return self._epoch_var
+
+    @property
+    def status_var(self) -> tk.StringVar:
+        """In-progress status label variable."""
+        return self._status_var
+
+    @property
+    def auto_advance_var(self) -> tk.BooleanVar:
+        """Auto-advance checkbox variable."""
+        return self._auto_var
+
+    @property
+    def next_button(self) -> ttk.Button:
+        """Next Turn button widget."""
+        return self._next_btn
+
+    @property
+    def stop_button(self) -> ttk.Button:
+        """Stop Simulation button widget."""
+        return self._stop_btn
+
+    @property
+    def reset_button(self) -> ttk.Button:
+        """Reset Simulation button widget."""
+        return self._reset_btn
 
     def _record_color(self, civ_idx: int, record) -> str:
         palette = CIV_PALETTES[civ_idx % len(CIV_PALETTES)]

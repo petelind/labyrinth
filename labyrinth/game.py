@@ -48,6 +48,7 @@ class GameConfig:
     turns_total: int = 20
     db_path: Path | None = None
     seed: int = 42
+    thinking_seconds: float = 180
 
 
 @dataclass
@@ -68,6 +69,7 @@ class Game:
     _summaries: list[TurnSummary] = field(default_factory=list)
     _repo: GameRepository | None = None
     _finished: bool = False
+    _thinking_seconds: float = 180
 
     @classmethod
     def create(
@@ -110,6 +112,7 @@ class Game:
             db_path=cfg.db_path,
             _rng=rng,
             _repo=repo,
+            _thinking_seconds=cfg.thinking_seconds,
         )
         log.info(
             "game.created",
@@ -155,6 +158,7 @@ class Game:
                 self.events,
                 chronicler=chronicler,
                 strategy_label=strategy_label_for(state.strategy),
+                thinking_seconds=self._thinking_seconds,
             )
             turn_summaries.append(summary)
             self._summaries.append(summary)
