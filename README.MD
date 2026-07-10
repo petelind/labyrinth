@@ -776,7 +776,7 @@ sequenceDiagram
         end
     end
 
-    G->>DB: finalize_game(winner = max soma among ACTIVE civs; null if none)
+    G->>DB: finalize_game(winner = highest soma among ACTIVE civs or null)
     G->>UI: show_final_scores()
 ```
 
