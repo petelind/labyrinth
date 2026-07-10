@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+saves/
+*.log
+dist/
+*.egg-info/
+.canvas.data.json

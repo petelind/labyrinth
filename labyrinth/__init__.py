@@ -1,0 +1,1 @@
+"""Labyrinth simulation package."""
