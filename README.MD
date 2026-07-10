@@ -18,7 +18,7 @@ This is a TCL/TK Python simulation showing  [likely] a triumph of genetic algori
 
 ```bash
 # 1. Clone
-git clone https://github.com/yourname/labyrinth.git
+git clone https://github.com/petelind/labyrinth.git
 cd labyrinth
 
 # 2. Create and activate a virtual environment
@@ -74,7 +74,7 @@ pytest -m "not gui"
 
 # Target State
 
-This section documents the **intended** GUI, persistence, and testing contract. Load/replay from saved games is planned but not yet implemented.
+This section documents the GUI, persistence, and testing contract as implemented.
 
 ## GUI workflow
 
@@ -86,7 +86,7 @@ This section documents the **intended** GUI, persistence, and testing contract. 
 | Controls | **Next Turn** / **Stop** / **Reset** / **Auto-advance** on Plot tab |
 | Auto-save | Every game auto-records to `saves/game_YYYYMMDD_HHMMSS.db` on start |
 | Save Game | Commentary tab exports the auto-save DB via Save As dialog |
-| Load/replay | *Out of scope for current milestone* |
+| Load/replay | Implemented — **Load Game** on Commentary tab; replay is turn-by-turn from stored `TurnSummary` |
 
 ## Persistence
 
@@ -133,12 +133,17 @@ When `LabyrinthApp(test_mode=True)`:
 3. In the end of the turn Civilization decides who will reproduce. Again, we shall be able to issue en masse command  "those who are Resistant to fire and water" or "those who ventured into Labyrinth successfully at least once reproduce".
 
 # Civilization decisions
-Game is a predefined set of Turns + Civilizations(Strategy).
-Each Timed Turn (3 mins):
-1. Strategize - process results from those who returned, update whatever data massives they have to base their decisions upon, issue/update StandingOrders set in Strategy which game uses to un the Turn loop. (game to call services to weed(Criteria), send_to_labyrinth(List<Raksha>), reproduce(Criteria) when player signals "make turn" or 3-mins expire), describe strategy for the current turn an set Strategy.current_strategy_sumup.
-2. Send Raksha's to the Labyrinth - Time Raksha's spend in Labyrinth does not count toward Turn time - only thinking counts. After they returned you see stats: died/returned/update of the Labyrinth uncovered by your Rakshas who returned.
-5. Decide who dies [mandatory if not enough Soma]; can be empty if you sustain all. Likely set on the Strategy during Strategy.decide() 
-5. Turn summarized: Soma start, Soma end, Soma expended, Population start, Population end, Strategy decicions done, whatnot -> recorded as Turn to be analyzed. You cannot think for more than 3 mins - every Turn is timed. 
+
+Game is a predefined set of turns plus civilizations (each with a strategy).
+
+Each turn (up to 5 mins thinking time):
+
+1. **Strategize** — `Strategy.decide()` runs in a daemon thread. It reads recent travelogs, updates survival estimates, and writes `StandingOrders` (weed / send / reproduce criteria + optional routes). The engine reads whatever orders exist when `decide()` returns or the 5-min budget expires.
+2. **Cull / Weed** — `select_cull_targets()` is called first; if it returns targets they are killed and `weed_criteria` is skipped. Otherwise `apply_weed(weed_criteria)` runs. Then mandatory kills cover any Soma deficit.
+3. **Trips** — Rakshas matching `send_criteria` (narrowed by `select_send_pool`) venture into the Labyrinth one by one. Each `Travelog` is merged into `known_map` in real time. Trip time does not count against the thinking budget.
+4. **Reproduce** — `apply_reproduce(reproduce_criteria)` pairs survivors via `select_repro_pairs()`; children are available next turn.
+5. **Sustenance** — 1 Soma per alive Raksha deducted at turn end.
+6. **Persist + notify** — `TurnSummary` written to SQLite; GUI updated.
 
 # GUI
 The spectator interface:
@@ -176,7 +181,7 @@ Main form with stat tabs showing current turn [can be switched to any turn alrea
 
 ### 2. LLM (Qwen via OLLAMA) — reasoning strategy
 
-LLM-based strategy using local OLLAMA Qwen, aware of game rules and the 3-minute per-turn thinking limit. Each turn it receives the same **classes of empirical data** as GenBot (gene counts, 64-archetype survival, clone counts, compact travelogs, soma bearers) plus a **blackboard** — structured self-notes from the prior turn (phase, hypothesized trap, plan, next intent). No epoch oracle; the model infers trap dominance from data and writes letters to its future self.
+LLM-based strategy using local OLLAMA Qwen, aware of game rules and the 5-minute per-turn thinking limit. Each turn it receives the same **classes of empirical data** as GenBot (gene counts, 64-archetype survival, clone counts, compact travelogs, soma bearers) plus a **blackboard** — structured self-notes from the prior turn (phase, hypothesized trap, plan, next intent). No epoch oracle; the model infers trap dominance from data and writes letters to its future self.
 
 
 # Technicalities
@@ -195,10 +200,10 @@ LLM-based strategy using local OLLAMA Qwen, aware of game rules and the 3-minute
 | Charts | `matplotlib` via `FigureCanvasTkAgg` | Gene breakdown bars + soma history lines |
 | Concurrency | `threading` (stdlib) | `Strategy.decide()` runs in a daemon thread; GUI on main thread |
 | Persistence | `sqlite3` (stdlib) | One `.db` file per saved game |
-| LLM inference | `ollama` Python client + Qwen2.5 local | No cloud dependency; streams with deadline awareness |
+| LLM inference | `ollama` Python client + qwen3:14b (local via OLLAMA) | No cloud dependency; streams with deadline awareness |
 | Serialization | `json` (stdlib) | Travelog paths, map knowledge snapshots stored as JSON blobs |
 | Logging | `structlog` | Structured decision logs feed the Commentary tab |
-| Testing | `pytest` + `pytest-mock` | Domain logic only; no GUI tests |
+| Testing | `pytest` + `pytest-mock` | Unit + E2E GUI tests (`pytest -m gui`) |
 
 ---
 
@@ -532,7 +537,7 @@ class StandingOrders:
     Orders the game engine executes at the turn boundary.
 
     Strategy.decide() writes to this object incrementally during its
-    thinking window. Game reads it when the 3-min timer fires OR when
+    thinking window. Game reads it when the 5-min timer fires OR when
     decide() returns — whichever comes first.
 
     Safe fallback: if decide() never updates last_updated_turn for the
@@ -559,7 +564,7 @@ class Strategy(ABC):
     Abstract base for all Civilization strategies.
 
     Lifecycle per turn:
-      1. Game calls set_deadline(now + 180).
+      1. Game calls set_deadline(now + 300).
       2. Game launches decide(context) in a daemon thread.
       3. decide() writes to self.standing_orders at any point.
       4. When the thread joins (or the deadline fires), Game reads
@@ -607,46 +612,19 @@ class Strategy(ABC):
 
 ```python
 class GenAlgStrategy(Strategy):
-    """
-    Survival-of-the-fittest with genetic diversity floors.
+    HARVEST_RATIO        = 0.40   # fraction of best-gene pool sent per harvest turn
+    MAX_POPULATION       = 200
+    CONSERVATION_POP     = 70     # alive threshold that activates conservation mode
+    MASS_DEATH_THRESHOLD = 0.25   # re-scout trigger
 
-    Core rules (no epoch oracle — learns from scout travelogs):
-    - Track per-gene trip-survival rate from recent travelogs.
-    - Maintain DIVERSITY_FLOOR (15%) for every gene type.
-    - Weed: remove Rakshas whose dominant gene has the worst learned
-      survival rate, but only down to the floor for that gene.
-    - Scout phase (no travelogs yet): send one alive Raksha per dominant
-      gene (up to 4) via select_send_pool().
-    - Harvest phase: sort alive Rakshas by learned survival_rate DESC;
-      send top ceil(HARVEST_RATIO × alive) via select_send_pool().
-    - Reproduce: pair survivors biased toward best-inferred gene while
-      preserving diversity floor fractions.
-    """
-
-    DIVERSITY_FLOOR: float = 0.15
-    HARVEST_RATIO:   float = 0.70
-
-    def decide(self, context: TurnContext) -> None:
-        self._update_survival_rates(context.recent_travelogs, context.rakshas)
-        counts = self._count_by_gene(context.rakshas)
-        total  = len([r for r in context.rakshas if r.alive])
-
-        weed  = self._build_weed_criteria(counts, total)
-        send  = self._build_send_criteria()
-        repro = self._build_repro_criteria()
-
-        self.standing_orders = StandingOrders(
-            weed_criteria          = weed,
-            send_criteria          = send,
-            reproduce_criteria     = repro,
-            current_strategy_sumup = self._summarize(context, counts),  # inferred gene, not epoch
-            last_updated_turn      = context.turn_number,
-        )
-
-    def select_send_pool(self, candidates, context) -> list[Raksha]:
-        """Scout (one/gene) or harvest (top HARVEST_RATIO by learned rate)."""
-        ...
+    def decide(self, context): ...          # sets StandingOrders + chronicles thinking
+    def select_send_pool(self, ...): ...    # scout (turn 1 / mass-death) or harvest
+    def select_repro_pairs(self, ...): ...  # similarity-mating: pair by archetype distance
+    def select_cull_targets(self, ...): ... # prune excess clones above soma-backed cap
+    # 5 private _narrate_* helpers emit step-by-step thinking to TurnChronicler
 ```
+
+See `labyrinth/strategy/gen_alg.py` for full implementation.
 
 ---
 
@@ -723,13 +701,13 @@ sequenceDiagram
     loop Turn 1 .. turns_total
 
         G->>UI: start_turn(n, epoch) [spectator sees epoch + full map]
-        G->>S: set_deadline(now + 180s)
 
         loop each Civilization C
 
             alt C.status == EXTINCT
                 G->>G: noop TurnSummary
             else ACTIVE
+                G->>S: set_deadline(now + 300s)
                 G->>S: decide(TurnContext without epoch) [daemon thread]
 
                 alt decide() joins before deadline
@@ -738,12 +716,17 @@ sequenceDiagram
                     G->>S: read standing_orders as-is (last known)
                 end
 
-                G->>C: weed(standing_orders.weed_criteria)
+                G->>S: select_cull_targets(context)
+                alt cull_targets non-empty
+                    G->>C: kill(cull_targets)
+                else
+                    G->>C: apply_weed(weed_criteria) + mandatory_kill(soma_deficit)
+                end
                 alt alive == 0 after weed
                     G->>C: mark_extinct(turn_number)
                 else
                     G->>S: select_send_pool(candidates, context)
-                    loop for each Raksha in send pool [parallel]
+                    loop for each Raksha in send pool
                         G->>L: run_trip(raksha, path or perimeter random walk)
                         loop each step (x,y) up to TRIP_MAX_STEPS=400
                             L->>L: resolve_trap(square, raksha.dna)
@@ -794,8 +777,8 @@ Two runtime mechanisms keep the simulation alive: the **game loop** that advance
 
 The game loop is the heartbeat of the simulation. Each call to `Game.next_turn()` runs one complete turn for every civilization in sequence:
 
-1. **Strategy thinks** — `Strategy.decide()` runs in a daemon thread with a time budget (default 180 s). The engine waits for it, or reads whatever `StandingOrders` exist when the deadline fires.
-2. **Weed** — Rakshas matching `weed_criteria` (plus any forced by Soma deficit) are killed.
+1. **Strategy thinks** — `Strategy.decide()` runs in a daemon thread with a time budget (default 300 s). The engine waits for it, or reads whatever `StandingOrders` exist when the deadline fires.
+2. **Cull / Weed** — `select_cull_targets()` runs first; if empty, `apply_weed(weed_criteria)` runs. Mandatory kills cover any Soma deficit.
 3. **Trips** — Surviving Rakshas from `send_criteria` venture into the Labyrinth one by one; each result is merged back into the civilization's `known_map`.
 4. **Reproduce** — `reproduce_criteria` pairs survivors; children are ready next turn.
 5. **Sustenance** — 1 Soma per alive Raksha is deducted at turn end.
@@ -818,12 +801,12 @@ LabyrinthApp._advance_turn()
                     │  for each CivilizationState                        │
                     │                                                    │
                     │  ① strategy thread                                 │
-                    │       set_deadline(now + 180 s)                    │
+                    │       set_deadline(now + 300 s)                    │
                     │       thread.start()  ← decide() writes orders     │
-                    │       thread.join(timeout=180 s)                   │
+                    │       thread.join(timeout=300 s)                   │
                     │       read standing_orders (fresh or fallback)     │
                     │                                                    │
-                    │  ② apply_weed(criteria) + mandatory_kill()         │
+                    │  ② select_cull_targets() or apply_weed() + mandatory_kill() │
                     │       if alive == 0 → mark_extinct                 │
                     │                                                    │
                     │  ③ for each raksha in send_pool:                   │
@@ -856,7 +839,7 @@ def next_turn(self) -> list[TurnSummary]:
         )
 ```
 
-Inside `run_turn_for_civilization`, the strategy thread + deadline contract enforces the 3-minute thinking budget:
+Inside `run_turn_for_civilization`, the strategy thread + deadline contract enforces the 5-minute thinking budget:
 
 ```261:272:labyrinth/engine/turn.py
     deadline = time.time() + thinking_seconds
