@@ -27,7 +27,7 @@ from labyrinth.strategy.base import Strategy
 
 log = get_logger(__name__)
 
-THINKING_SECONDS = 180
+THINKING_SECONDS = 300
 
 
 @dataclass
@@ -159,8 +159,10 @@ def _build_context(
     turn_number: int,
     turns_remaining: int,
     chronicler: TurnChronicler | None,
+    labyrinth: Labyrinth,
 ) -> TurnContext:
     """Build read-only turn context for strategy."""
+    epoch = labyrinth.current_epoch
     return TurnContext(
         turn_number=turn_number,
         soma=state.civilization.soma,
@@ -168,6 +170,7 @@ def _build_context(
         recent_travelogs=list(state.civilization.recent_travelogs),
         known_map=dict(state.civilization.known_map),
         turns_remaining=turns_remaining,
+        epoch_turns_remaining=epoch.turns_remaining if epoch else None,
         chronicler=chronicler,
         civilization_id=state.civilization.id,
         civilization_name=state.civilization.name,
@@ -258,7 +261,7 @@ def run_turn_for_civilization(
         chronicler.record_opening(soma_start, pop_start)
 
     context = _build_context(
-        civ_state, turn_number, turns_remaining, chronicler,
+        civ_state, turn_number, turns_remaining, chronicler, labyrinth,
     )
     deadline = time.time() + thinking_seconds
     civ_state.strategy.set_deadline(deadline)

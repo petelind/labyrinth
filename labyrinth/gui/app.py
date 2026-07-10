@@ -131,7 +131,7 @@ class LabyrinthApp(tk.Tk):
 
     def _create_game(self, turns_total: int) -> tuple[Game, GameEvents]:
         events = GameEvents()
-        thinking_seconds = TEST_THINKING_SECONDS if self._test_mode else 180
+        thinking_seconds = TEST_THINKING_SECONDS if self._test_mode else 300
         seed = self._game_seed if self._game_seed is not None else 42
         game = Game.create(
             self._civilization_specs(),
@@ -180,7 +180,7 @@ class LabyrinthApp(tk.Tk):
 
         self._notebook.add(self._plot_tab, text="Plot")
         self._notebook.add(self._civs_tab, text="Civilizations")
-        self._notebook.add(self._commentary_tab, text="Commentary")
+        self._notebook.add(self._commentary_tab, text="Chronicles")
 
         self._wire_events()
         self._plot_tab.bind_next_turn(self._advance_turn)

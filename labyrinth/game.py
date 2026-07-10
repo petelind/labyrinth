@@ -48,7 +48,7 @@ class GameConfig:
     turns_total: int = 20
     db_path: Path | None = None
     seed: int = 42
-    thinking_seconds: float = 180
+    thinking_seconds: float = 300
 
 
 @dataclass
@@ -69,7 +69,7 @@ class Game:
     _summaries: list[TurnSummary] = field(default_factory=list)
     _repo: GameRepository | None = None
     _finished: bool = False
-    _thinking_seconds: float = 180
+    _thinking_seconds: float = 300
 
     @classmethod
     def create(

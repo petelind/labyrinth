@@ -127,7 +127,7 @@ When `LabyrinthApp(test_mode=True)`:
 1. The goal of the game is to have most Soma in the end of the Game (predefined number of turns). You start with `INITIAL_RAKSHAS × turns_total` Soma (e.g. 2 000 for a default 20-turn game).
 2. Soma is gathered in the center of 100 square x 100 squares Labyrinth. When you Raksha arrives to the center of Labyrinth he gets 1 to 10 Soma, random.
 3. Civilization consists of Rakshas (you start with 100 with different gene types of equal number to adapt to any Epoch). To sustain 1 Raksha for 1 turn you need 1 Soma - if you dont have enough you have to indicate who has to die. You can decide who dies even if you have enough Soma - "weed the field", so to say. If you have enough Soma to sustain those Rakshas you selected - Rakhash is available for tasking and can be sent into Labyrinth. For killing/sustaining Rakshas en masse you can issue a command like "sustain only those who are Resistant to fire" or "sustain 100 of each Resistant to Fire, Earth, Water, Air." or "Sustain Rakshas who ventured into Labyrinth successfully at least once".
-4. Labyrinth is a blackbox for the Civilization - we dont know whats inside. Labyrinth has Traps of different types - Earth, Fire, Air, Water scattered across the map. **10% of squares are traps**; **75% of those traps** belong to the current epoch type (Epoch of Water, Fire, etc.). The remaining 90% of squares are free passage. Epoch has lenghth between 5 to 10 turns (random). (The idea of the epoch is that we want to punish for hyper-optimization - in the epoch of fire those who wiped out all Rakshas of other dominant Genes will suffer when Epoch changes.)
+4. Labyrinth is a blackbox for the Civilization - we dont know whats inside. Labyrinth has Traps of different types - Earth, Fire, Air, Water scattered across the map. **2.5% of squares are traps**; **75% of those traps** belong to the current epoch type (Epoch of Water, Fire, etc.). The remaining 97.5% of squares are free passage. Epoch has lenghth between 5 to 10 turns (random). (The idea of the epoch is that we want to punish for hyper-optimization - in the epoch of fire those who wiped out all Rakshas of other dominant Genes will suffer when Epoch changes.)
 5. Takes a Trip into a Labyrinth. Trip may have Path defined (as X1, Y1  > ... -> Xn, Yn). Rakshas steps into a Square with a Trap of Type he is not Resistant to - Rakshas has 50% chance to die. If Resistant - no harm if he has dominant Resistance gene, 25% chance to die if has secondary Resistance Gene. Rakshas who went in all the way to the center gets random 1-10 Soma and immediately teleports home, bringing back his Travelog - record of the path travelled, which steps X1, Y1  -> Xn, Yn he took and what was there: free, Trap of Type<t>, Soma.
 6. Each Rakshas has DNA - 3 genes defining his Resistance, 1 Dominant and 1 Secondary and 1 Recessive (random gene from the parental tree, but not one he already has). He gets them from Parents - which one is dominant and which is secondary decided at random, Recessive is random from non-dominant of his Parents but available in the "family tree". 
 3. In the end of the turn Civilization decides who will reproduce. Again, we shall be able to issue en masse command  "those who are Resistant to fire and water" or "those who ventured into Labyrinth successfully at least once reproduce".
@@ -332,7 +332,7 @@ class SquareRecord:
     trap_type:  GeneType | None  # None = free passage
     is_center:  bool = False
 
-TRIP_MAX_STEPS: int = 200  # hard cap for trips on 100×100 grid
+TRIP_MAX_STEPS: int = 400  # hard cap for trips on 100×100 grid
 
 @dataclass
 class Travelog:
@@ -745,7 +745,7 @@ sequenceDiagram
                     G->>S: select_send_pool(candidates, context)
                     loop for each Raksha in send pool [parallel]
                         G->>L: run_trip(raksha, path or perimeter random walk)
-                        loop each step (x,y) up to TRIP_MAX_STEPS=200
+                        loop each step (x,y) up to TRIP_MAX_STEPS=400
                             L->>L: resolve_trap(square, raksha.dna)
                             alt trap death
                                 L-->>G: TripResult(died, partial_travelog)
@@ -1027,8 +1027,8 @@ The engine fires `events.on_trip_result(civ_id, result)` from `_execute_trips()`
 
 | # | Topic | Decision |
 |---|---|---|
-| 1 | Trap distribution | **Fixed at epoch start.** 10% of squares are traps; 75% of traps match the epoch dominant type, remainder split among other types. Center squares always free. Layout re-rolled on epoch change. |
-| 2 | Trip length limit | **`TRIP_MAX_STEPS = 200`** (hard cap). If reached without trap death, Raksha **returns home alive** with partial `Travelog`, `hit_step_limit=True`, `survived=True`, and zero Soma. |
+| 1 | Trap distribution | **Fixed at epoch start.** 2.5% of squares are traps; 75% of traps match the epoch dominant type, remainder split among other types. Center squares always free. Layout re-rolled on epoch change. |
+| 2 | Trip length limit | **`TRIP_MAX_STEPS = 400`** (hard cap). If reached without trap death, Raksha **returns home alive** with partial `Travelog`, `hit_step_limit=True`, `survived=True`, and zero Soma. |
 | 2b | Trip entry | Rakshas **enter from a random perimeter square** (x=0, x=99, y=0, or y=99). Strategies may prescribe **routes** (criteria → cardinal path); unmatched Rakshas random-walk from the perimeter. |
 | 3 | Trip parallelism | **All civilizations' trips run simultaneously** in parallel thread pools. GUI updates fire as individual trip results arrive from any civilization. |
 | 4 | DNA inheritance | Child draws one gene from `{parent_a.dominant, parent_a.secondary}` and one from `{parent_b.dominant, parent_b.secondary}`; assignment to child's dominant/secondary is random. Recessive drawn randomly from the union of both parents' three genes, excluding the two already assigned. |
@@ -1041,7 +1041,58 @@ The engine fires `events.on_trip_result(civ_id, result)` from `_execute_trips()`
 | 11 | Send volume | Strategy decision only — no engine cap. `select_send_pool()` narrows criteria-matched candidates before trips. |
 | 12 | Strategy epistemics | **Strategies never receive `current_epoch`.** They infer trap dominance from scout travelogs and `known_map`. The **spectator** (GUI, narrative) sees full state including epoch name and god-view labyrinth. |
 
+---
+
+# Experiments
+
+Three experiments, three different answers to the same question: *does reasoning beat iteration?*
+
+## 1 - Introduce a comittee & voting
+
+Change LLM strategy in a way you will have number of diverse viewpoints - optimists, pessimists,
+sceptics, inspirationalists, etc. Make them submit decisions for voting and then vote as comittee -
+actions voted "yeah" get implemented.
+*Monitor - What happened to the quality of decisions? Whats happening to the speed of decision making?*
+
+## 2 - "Fair" thinking - LLM allowed to think through
+
+The way it is now we forcefully make AlgoBot operate at the same pace LLM strategy operates.
+To an extent, *its unfair for the AlgoBot - can you explain why?*
 
 
+## 3 — Bounded thinking time (turn-race mode)
 
+Give each civilization a fixed wall-clock relly constaining budget per turn (e.g. 1 min). AlgoBot
+answers in milliseconds; LLM strategies must emit valid JSON before the buzzer or
+forfeit the turn to their prior standing orders. 
+*Does fast imperfect heuristics beat slow deliberation under time pressure?*
 
+## 4 — Unbounded, self-paced civilizations
+
+Each civilization plays its own turn against a pre-generated set of labyrinth
+snapshots (same seed, same epoch layout, same initial population — replayed
+independently). No shared turn clock. Run each for 10 minutes of wall time and
+compare final scores. Preserves input fairness while letting LLMs reason as long
+as they need, without blocking the other civilization, which runs forward without much thinking.
+*Shall we see which one wins?*
+
+# SPOILER ALERT! DO NOT READ! OUTCOMES OF THE EXPERIMENTS:
+## Experiment 1 — Committee & voting
+
+Speed collapses. Each turn now requires N LLM calls (one per committee member) plus a reconciliation step. If you have 5 members, wall-clock time per turn goes from ~3 min to ~15 min. The population will be extinct before the committee reaches a quorum on what to do about it.
+
+Quality is genuinely interesting though. Optimists and pessimists will systematically disagree on send ratios — pessimists want to conserve, optimists want to raid. The vote will tend toward the median, which is actually a reasonable risk-averse policy. You might get better decisions per turn than a single LLM. *But it doesn't matter, because the pace kills you.*
+
+The meta-lesson: committees don't slow down because people are stupid. They slow down because _coordination is a second problem_ layered on top of the original problem.
+
+## Experiment 2 — Fair thinking for AlgoBot
+
+The unfairness to AlgoBot is this: AlgoBot is forced to wait while Qwen thinks, then gets the same 20 turns. AlgoBot could have run 10,000 turns in the time Qwen spent deliberating on turn 2. The shared turn clock means AlgoBot's speed advantage — its core strength — is completely neutralised. It's like putting a sprinter and a chess grandmaster in a race, then requiring both to move at the grandmaster's pace. You're not testing who's better at the race; you're testing who's better at chess.
+
+## Experiment 3 — Bounded clock
+
+AlgoBot wins decisively. See earlier analysis — fallback orders compound fast. Thats why in crysis taking action and respond to the circumstances kinda beats "stop and properly think."
+
+## Experiment 4 — Wall-clock marathon
+
+AlgoBot wins by ~200,000× on turns. The soma difference will be astronomical. But the interesting number to watch is Qwen's per-turn efficiency — soma gathered per expedition sent. If Qwen is genuinely reasoning well, it should outperform AlgoBot's yield-per-trip even while losing catastrophically on total score. *This is mind-blowing if you think - you are _genuinely better_ in defining the strategy (and data proves it), but you loose to the basic-heuristic  dumb piece who just outpaces you.*
