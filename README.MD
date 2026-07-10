@@ -52,7 +52,7 @@ python -c "import tkinter; print('Tk', tkinter.TclVersion)"
 python main.py
 ```
 
-Games are auto-recorded to `saves/game_YYYYMMDD_HHMMSS.db` when a simulation starts. Use **Save Game** on the Commentary tab to export a copy elsewhere.
+Games are auto-recorded to `saves/game_YYYYMMDD_HHMMSS.db` when a simulation starts. Use **Save Game** on the Chronicles tab to export a copy elsewhere.
 
 ## Run tests
 
@@ -85,8 +85,8 @@ This section documents the GUI, persistence, and testing contract as implemented
 | Turn execution | Background worker thread; UI stays responsive during turns |
 | Controls | **Next Turn** / **Stop** / **Reset** / **Auto-advance** on Plot tab |
 | Auto-save | Every game auto-records to `saves/game_YYYYMMDD_HHMMSS.db` on start |
-| Save Game | Commentary tab exports the auto-save DB via Save As dialog |
-| Load/replay | Implemented — **Load Game** on Commentary tab; replay is turn-by-turn from stored `TurnSummary` |
+| Save Game | Chronicles tab exports the auto-save DB via Save As dialog |
+| Load/replay | Implemented — **Load Game** on Chronicles tab; replay is turn-by-turn from stored `TurnSummary` |
 
 ## Persistence
 
@@ -153,8 +153,7 @@ Main form with stat tabs showing current turn [can be switched to any turn alrea
 - and Labirinths as uncovered by every Civilization + Underneath Civilization stats with Rakshas and Soma count + outcomes of their Rakshas venturing into Labirinth in real-time, together with Labyrinth mapped by survived Rakshas: survived + Soma gathered/died.
 - "Next turn" button with auto-advance checkbox.
 2. Tab "Civilizations": with stats & diagrams on their population as charts updated in real time: count, genes breakdown, soma.
-3. Tab "Commentary": Decision making log from their Strategy - who dies and why, who sent and why, who breeds and why; turn over turn.
-4. Save game (in the end), load game (can be "replayed" turn by turn)
+3. Tab "Chronicles": Turn-by-turn strategy narrative from `TurnChronicler` — internal deliberation (AlgoBot step-by-step reasoning or LLM thinking stream), conclusion, plan, orders, weeding, labyrinth outcomes, reproduction, and close stats; plus per-turn summary lines. **Save Game** / **Load Game** in the tab header.
 
 # Players and strategies
 
@@ -202,96 +201,30 @@ LLM-based strategy using local OLLAMA Qwen, aware of game rules and the 5-minute
 | Persistence | `sqlite3` (stdlib) | One `.db` file per saved game |
 | LLM inference | `ollama` Python client + qwen3:14b (local via OLLAMA) | No cloud dependency; streams with deadline awareness |
 | Serialization | `json` (stdlib) | Travelog paths, map knowledge snapshots stored as JSON blobs |
-| Logging | `structlog` | Structured decision logs feed the Commentary tab |
+| Logging | `structlog` | Structured logs + turn chapters feed the Chronicles tab |
 | Testing | `pytest` + `pytest-mock` | Unit + E2E GUI tests (`pytest -m gui`) |
 
 ---
 
-# Wireframes (Tkinter / ttk)
+# Screenshots
 
 ## Tab: Plot
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Labyrinth Simulation                             Turn 4 / 20   ⏱  02:43    │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  [Plot]   [Civilizations]   [Commentary]                                    │
-├────────────────────────────────────────┬────────────────────────────────────┤
-│ ACTUAL LABYRINTH  (tk.Canvas 400×400)  │ CIV: AlgoBot  [GenAlg]             │
-│ Epoch: ██ FIRE   ░░░░░░░  3 turns left │   Soma  1 243    Rakshas  88 alive │
-│                                        │  ┌──────────────────────────────┐  │
-│  · · · F · · W · · · · E · · · · · ·  │  │ Uncovered map  (tk.Canvas)   │  │
-│  · W · · · · · · A · · · · · · · · ·  │  │  ·  known free               │  │
-│  · · · · W · · · · · · · · · A · · ·  │  │  F/W/E/A  trap type found    │  │
-│  · · F · · · · · · · · · · · · · · ·  │  │  ●  soma collected           │  │
-│  · · · · · · · · · ● · · · · · · · ·  │  │  ✝  raksha died here         │  │
-│         [center square = ●]            │  └──────────────────────────────┘  │
-│                                        │   Turn: 12 sent · 9 back · 3 ✝     │
-│  F=Fire  W=Water  E=Earth  A=Air       ├────────────────────────────────────┤
-│  (spectator sees all traps & soma)     │ CIV: Qwen-7B  [LLM]                │
-│                                        │   Soma    987    Rakshas  95 alive │
-│                                        │  ┌──────────────────────────────┐  │
-│                                        │  │ Uncovered map  (tk.Canvas)   │  │
-│                                        │  └──────────────────────────────┘  │
-│                                        │   Turn:  8 sent ·  7 back · 1 ✝    │
-├────────────────────────────────────────┴────────────────────────────────────┤
-│  [ Next Turn ]   [x] Auto-advance                   Game: 16 turns remain   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+![Plot tab — god-view labyrinth, per-civilization uncovered maps, and turn controls](screenshots/Labyrinth.png)
+
+God-view labyrinth (left) with epoch indicator; per-civilization uncovered maps and live trip stats (right). **Next Turn**, **Stop**, **Reset**, and **Auto-advance** at the bottom.
 
 ## Tab: Civilizations
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  [Plot]   [Civilizations]   [Commentary]                                    │
-├──────────────────────────────────────┬──────────────────────────────────────┤
-│ AlgoBot  (GenAlg)                    │ Qwen-7B  (LLM)                       │
-│                                      │                                      │
-│  Soma over turns                     │  Soma over turns                     │
-│  1400 ╮                              │  1400                                │
-│  1200  ╲__                           │  1200 ╮╭─╮                           │
-│  1000     ╰──╮                       │  1000  ╰─╯ ╰──                       │
-│       T1  T2  T3  T4                 │       T1  T2  T3  T4                 │
-│                                      │                                      │
-│  Gene breakdown — turn 4             │  Gene breakdown — turn 4             │
-│  FIRE  ████████████ 42%              │  FIRE  ████████ 32%                  │
-│  WATER ████████     28%              │  WATER █████████ 35%                 │
-│  EARTH █████        18%              │  EARTH █████     20%                 │
-│  AIR   ████         12%              │  AIR   ████      13%                 │
-│                                      │                                      │
-│  Population: 88    Soma: 1 243       │  Population: 95    Soma: 987         │
-├──────────────────────────────────────┴──────────────────────────────────────┤
-│  [ Turn: ←  1  2  3 [4]  5  6 ... → ]                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+![Civilizations tab — soma history and gene breakdown per civilization](screenshots/Stats.png)
 
-## Tab: Commentary
+Side-by-side charts: soma over turns and dominant-gene breakdown for each civilization.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  [Plot]   [Civilizations]   [Commentary]                                    │
-├──────────────────────────────────────────────────────────┬──────────────────┤
-│  [ Turn: ←  1  2  3 [4]  5  6 ... → ]                   │  [Save Game]     │
-├──────────────────────────────────────────────────────────┴──────────────────┤
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │ [T4] AlgoBot (GenAlg) ─────────────────────────────────────────── ▲ │    │
-│  │   Strategy: "Epoch FIRE turn 2/7. Harvesting aggressively. Weeding │    │
-│  │   low-survival non-FIRE below diversity floor."                    │    │
-│  │   Weed:      "EARTH-dominant, <2 trips survived (5 Rakshas)"       │    │
-│  │   Sent:      65 Rakshas  (FIRE-dominant priority)                  │    │
-│  │   Reproduce: "FIRE×WATER pairs; maintain 15% floor each gene"      │    │
-│  │                                                                    │    │
-│  │ [T4] Qwen-7B (LLM) ───────────────────────────────────────────── │    │
-│  │   Strategy: "Soma comfortable. Dispatching scouts to uncharted     │    │
-│  │   north-east quadrant. No weed needed."                            │    │
-│  │   Weed:      "None — sustain all"                                  │    │
-│  │   Sent:      40 Rakshas  (top trip-success-rate)                   │    │
-│  │   Reproduce: "Those who reached center at least once"              │    │
-│  │                                                                    │    │
-│  │ [T3] AlgoBot (GenAlg) ─────────────────────────────────────────── ▼ │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+## Tab: Chronicles
+
+![Chronicles tab — turn chapters with strategy deliberation and summary lines](screenshots/Chronicles.png)
+
+Each turn appends one **chapter** (from `TurnChronicler.flush()`) plus compact **summary lines** (`on_turn_end`). AlgoBot emits scripted step-by-step deliberation; the LLM emits its Ollama thinking stream. Structlog lines may also appear above chapters when the log handler is enabled. **Load Game** / **Save Game** in the tab header.
 
 ---
 
