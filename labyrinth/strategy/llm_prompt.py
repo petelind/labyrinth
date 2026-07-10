@@ -17,6 +17,8 @@ Each turn you receive a data snapshot. Key fields:
 - known_trap_counts: map evidence for inferred trap epoch.
 - last_travelogs: compact last expedition — gene, survived, soma, traps_seen per trip.
 - soma_bearers: dominant genes that gathered soma last turn — prioritize when soma is tight.
+- center_squares: coordinates where soma is awarded — plan harvest routes toward these.
+- soma_rule: soma is only gained at center squares, not elsewhere on the grid.
 - prior_blackboard: YOUR notes from last turn — read first, then reconcile with fresh data.
 
 ## Decision workflow (each turn)
@@ -49,7 +51,7 @@ On mass death or trap histogram shift: set hypothesized_trap to unknown, phase t
 
 ## Path prescription (routes)
 - Rakshas enter ONLY from the perimeter (outer edge: x=0, x=99, y=0, or y=99).
-- Each trip allows up to 200 cardinal steps.
+- Each trip allows up to 400 cardinal steps.
 - A route assigns a path to Rakshas matching criteria. First matching route wins.
 - Path format: list of [x, y] pairs (integers 0–99). Each step must be cardinally adjacent to the previous (no diagonals, no jumps).
 - First coordinate MUST be on the perimeter.

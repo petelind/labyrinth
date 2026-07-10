@@ -52,7 +52,7 @@ class CommentaryTab(ttk.Frame):
     def _build(self) -> None:
         nav = ttk.Frame(self)
         nav.pack(fill=tk.X, padx=4, pady=4)
-        ttk.Label(nav, text="Strategy Commentary").pack(side=tk.LEFT)
+        ttk.Label(nav, text="Strategy Chronicles").pack(side=tk.LEFT)
         self._save_btn = ttk.Button(nav, text="Save Game")
         self._save_btn.pack(side=tk.RIGHT)
         self._load_btn = ttk.Button(nav, text="Load Game")

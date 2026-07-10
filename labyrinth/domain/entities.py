@@ -116,6 +116,7 @@ class TurnContext:
     recent_travelogs: list[Travelog]
     known_map: dict[tuple[int, int], SquareRecord]
     turns_remaining: int
+    epoch_turns_remaining: int | None = None
     chronicler: TurnChronicler | None = None
     civilization_id: str = ""
     civilization_name: str = ""

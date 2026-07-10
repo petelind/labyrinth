@@ -75,15 +75,52 @@ class TestCardinalScoutRoutes:
         strategy.decide(_context(rakshas, turn=1))
         assert len(strategy.standing_orders.routes) == 4
 
-    def test_harvest_standing_orders_have_no_routes(self) -> None:
-        rakshas = [_raksha(GeneType.FIRE) for _ in range(80)]
-        rakshas += [_raksha(GeneType.WATER) for _ in range(80)]
-        logs = [Travelog(rakshas[0].id, [(0, 0)], {}, 5, True)]
+    def test_harvest_reuses_cached_survivor_routes(self) -> None:
+        fire = _raksha(GeneType.FIRE)
+        rakshas = [fire] + [_raksha(GeneType.WATER) for _ in range(80)]
+        rakshas += [_raksha(GeneType.FIRE) for _ in range(79)]
+        path = [(0, 49)] + [(x, 49) for x in range(1, 10)]
+        logs = [Travelog(fire.id, path, {}, 50, True)]
         strategy = GenAlgStrategy()
         strategy._initial_scout_done = True
         strategy.set_deadline(__import__("time").time() + 180)
         strategy.decide(_context(rakshas, travelogs=logs, turn=2))
-        assert strategy.standing_orders.routes == []
+        assert len(strategy.standing_orders.routes) >= 1
+        assert strategy.standing_orders.routes[0].path == tuple(path)
+
+    def test_harvest_fallback_to_cardinal_when_cache_empty(self) -> None:
+        rakshas = [_raksha(GeneType.FIRE) for _ in range(80)]
+        rakshas += [_raksha(GeneType.WATER) for _ in range(80)]
+        strategy = GenAlgStrategy()
+        strategy._initial_scout_done = True
+        strategy.set_deadline(__import__("time").time() + 180)
+        strategy.decide(_context(rakshas, travelogs=[], turn=2))
+        assert len(strategy.standing_orders.routes) == 1
+        assert strategy.standing_orders.routes[0].criteria[0].value == GeneType.FIRE
+
+    def test_epoch_shock_forces_scout_and_clears_harvest_routes(self) -> None:
+        from labyrinth.domain.entities import SquareRecord
+
+        fire = _raksha(GeneType.FIRE)
+        rakshas = [fire] + [_raksha(GeneType.WATER) for _ in range(80)]
+        path = [(0, 49), (1, 49), (2, 49)]
+        logs = [Travelog(fire.id, path, {}, 50, True)]
+        strategy = GenAlgStrategy()
+        strategy._initial_scout_done = True
+        strategy._last_epoch_turns_remaining = 1
+        strategy._had_known_map = True
+        strategy.set_deadline(__import__("time").time() + 180)
+        ctx = TurnContext(
+            turn_number=5,
+            soma=1000,
+            rakshas=rakshas,
+            recent_travelogs=logs,
+            known_map={(0, 0): SquareRecord(0, 0, GeneType.FIRE)},
+            turns_remaining=15,
+            epoch_turns_remaining=8,
+        )
+        strategy.decide(ctx)
+        assert len(strategy.standing_orders.routes) == 4
 
     def test_resolve_route_matches_dominant_gene(self) -> None:
         fire_raksha = _raksha(GeneType.FIRE, GeneType.WATER)

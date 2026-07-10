@@ -21,7 +21,7 @@ from labyrinth.logging_config import get_logger
 
 log = get_logger(__name__)
 
-TRAP_DENSITY = 0.025
+TRAP_DENSITY = 0.025  # intentionally sparse — random walks need room to explore
 DOMINANT_TRAP_RATIO = 0.75
 SOMA_REWARD_MIN = 25
 SOMA_REWARD_MAX = 100

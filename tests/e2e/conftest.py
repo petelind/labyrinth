@@ -130,12 +130,12 @@ def gui_app_ten_turn(tmp_path):
     """
     GenAlg-only app seeded for a stable 10-turn auto-advance run.
 
-    Seed 16 completes all 10 turns; seed 42 ends early via extinction.
+    Seed 17 completes all 10 turns under test_mode (0.1s thinking budget).
     """
     from labyrinth.gui.app import LabyrinthApp
 
     db_path = tmp_path / "test.db"
-    app = LabyrinthApp(test_mode=True, db_path=db_path, game_seed=16)
+    app = LabyrinthApp(test_mode=True, db_path=db_path, game_seed=17)
     yield app
     try:
         app.destroy()

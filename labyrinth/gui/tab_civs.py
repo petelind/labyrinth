@@ -37,6 +37,7 @@ class CivilizationsTab(ttk.Frame):
         self._figure = Figure(figsize=(7, 7), dpi=80)
         self._canvas = FigureCanvasTkAgg(self._figure, master=self)
         self._canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._redraw_all()
 
     def on_turn_end(self, summaries: list[TurnSummary]) -> None:
         for summary in summaries:
@@ -50,8 +51,7 @@ class CivilizationsTab(ttk.Frame):
         self._civ_states = civilizations
         self._history = {s.civilization.id: [] for s in civilizations}
         self._turn_label.configure(text="0")
-        self._figure.clear()
-        self._canvas.draw()
+        self._redraw_all()
 
     def _civ_label(self, state) -> str:
         name = state.civilization.name
@@ -66,6 +66,8 @@ class CivilizationsTab(ttk.Frame):
                 counts[raksha.dna.dominant] += 1
         return counts
 
+    _NO_DATA_MSG = "No data yet — come back when at least one turn is completed."
+
     def _redraw_all(self) -> None:
         self._figure.clear()
         has_history = any(self._history.get(s.civilization.id) for s in self._civ_states)
@@ -73,6 +75,18 @@ class CivilizationsTab(ttk.Frame):
             any(r.alive for r in s.civilization.rakshas) for s in self._civ_states
         )
         if not has_history and not has_population:
+            ax = self._figure.add_subplot(111)
+            ax.axis("off")
+            ax.text(
+                0.5,
+                0.5,
+                self._NO_DATA_MSG,
+                ha="center",
+                va="center",
+                fontsize=13,
+                color="gray",
+                transform=ax.transAxes,
+            )
             self._canvas.draw()
             return
 

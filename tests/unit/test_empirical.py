@@ -140,6 +140,9 @@ class TestBuildStrategySnapshot:
         assert "clone_counts" in snap
         assert "last_travelogs" in snap
         assert "soma_bearers" in snap
+        assert "center_squares" in snap
+        assert "soma_rule" in snap
+        assert snap["center_squares"] == [[49, 49], [49, 50], [50, 49], [50, 50]]
         assert "epoch" not in snap
 
     def test_includes_prior_blackboard_when_set(self) -> None:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from labyrinth.domain.archetypes import all_archetype_dnas, dna_key, format_dna
 from labyrinth.domain.entities import Raksha, SquareRecord, Travelog, TurnContext
-from labyrinth.domain.types import GeneType
+from labyrinth.domain.types import GeneType, CENTER_SQUARES
+from labyrinth.engine.labyrinth import SOMA_REWARD_MAX, SOMA_REWARD_MIN
 
 DEFAULT_SURVIVAL_RATE = 0.5
 
@@ -244,6 +245,11 @@ def build_strategy_snapshot(
         "clone_counts": clone_counts(context.rakshas),
         "last_travelogs": compact_travelogs(context.recent_travelogs, context.rakshas),
         "soma_bearers": soma_bearing_genes(context.recent_travelogs, context.rakshas),
+        "center_squares": [list(coord) for coord in sorted(CENTER_SQUARES)],
+        "soma_rule": (
+            "Soma is awarded only when a Raksha steps on a center square "
+            f"({SOMA_REWARD_MIN}–{SOMA_REWARD_MAX} soma)."
+        ),
     }
     if prior_blackboard:
         snapshot["prior_blackboard"] = prior_blackboard

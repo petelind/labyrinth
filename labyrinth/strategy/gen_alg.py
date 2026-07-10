@@ -19,6 +19,8 @@ from labyrinth.domain.types import Criterion, CriteriaField, CriteriaOp, GeneTyp
 from labyrinth.logging_config import get_logger
 from labyrinth.strategy.base import Strategy
 from labyrinth.strategy.empirical import per_gene_survival_rates, update_archetype_survival
+from labyrinth.strategy.epoch_shock import detect_epoch_shock
+from labyrinth.strategy.route_cache import build_route_cache
 
 log = get_logger(__name__)
 
@@ -103,6 +105,10 @@ class GenAlgStrategy(Strategy):
         self._survival_rates: dict[GeneType, float] = {g: 0.50 for g in GeneType}
         self._archetype_survival: dict[tuple[GeneType, GeneType, GeneType], float] = {}
         self._initial_scout_done: bool = False
+        self._cached_routes: list[Route] = []
+        self._last_epoch_turns_remaining: int | None = None
+        self._had_known_map: bool = False
+        self._epoch_shock_this_turn: bool = False
 
     def decide(self, context: TurnContext) -> None:
         if self.should_stop():
@@ -110,10 +116,32 @@ class GenAlgStrategy(Strategy):
         self._update_survival_rates(context.recent_travelogs, context.rakshas)
         counts = self._count_by_gene(context.rakshas)
 
+        epoch_shock = self._epoch_shock(context)
+        self._epoch_shock_this_turn = epoch_shock
+        if epoch_shock:
+            self._cached_routes = []
+            log.info(
+                "gen_alg.epoch_shock",
+                turn=context.turn_number,
+                reason="counter_reset_or_map_clear",
+            )
+        elif context.recent_travelogs:
+            self._cached_routes = build_route_cache(
+                context.recent_travelogs,
+                context.rakshas,
+            )
+
         send = self._build_send_criteria(context)
         repro = self._build_repro_criteria(context)
-        scouting = self._needs_scout(context)
-        routes = list(_CARDINAL_ROUTES) if scouting else []
+        scouting = self._needs_scout(context) or epoch_shock
+        routes = self._select_routes(context, scouting)
+        log.debug(
+            "gen_alg.routes_selected",
+            turn=context.turn_number,
+            mode="scout" if scouting else "harvest",
+            route_count=len(routes),
+            cached_routes=len(self._cached_routes),
+        )
 
         self.set_standing_orders(StandingOrders(
             weed_criteria=[],
@@ -123,12 +151,69 @@ class GenAlgStrategy(Strategy):
             current_strategy_sumup=self._summarize(context, counts),
             last_updated_turn=context.turn_number,
         ))
+        self._last_epoch_turns_remaining = context.epoch_turns_remaining
+        self._had_known_map = len(context.known_map) > 0
         if context.chronicler is not None:
             context.chronicler.record_thinking(
                 self._build_thinking_narrative(context, counts)
             )
             context.chronicler.record_reasoning(self._explain_decision(context, counts))
             context.chronicler.record_deliberation(self._summarize(context, counts))
+
+    def _epoch_shock(self, context: TurnContext) -> bool:
+        """Return True when labyrinth epoch rolled and cached routes are stale."""
+        return detect_epoch_shock(
+            context.epoch_turns_remaining,
+            self._last_epoch_turns_remaining,
+            len(context.known_map),
+            self._had_known_map,
+        )
+
+    def _select_routes(self, context: TurnContext, scouting: bool) -> list[Route]:
+        """
+        Choose routes for this turn: scout cardinal lines or cached harvest paths.
+
+        :param context: Current turn context.
+        :param scouting: Whether scout mode is active.
+        :return: Route list for StandingOrders.
+        """
+        if scouting:
+            return list(_CARDINAL_ROUTES)
+        if self._cached_routes:
+            return self._filter_routes_for_harvest(context, self._cached_routes)
+        return self._dominant_cardinal_fallback(context)
+
+    def _filter_routes_for_harvest(
+        self,
+        context: TurnContext,
+        routes: list[Route],
+    ) -> list[Route]:
+        """Keep cached routes relevant to the current harvest or conservation send pool."""
+        if self._conservation_mode(context):
+            return list(routes)
+        best = self._inferred_best_gene(
+            context.recent_travelogs, context.rakshas, soma=context.soma,
+        )
+        filtered = [
+            route for route in routes
+            if any(
+                criterion.field == CriteriaField.GENE_DOMINANT
+                and criterion.op == CriteriaOp.EQ
+                and criterion.value == best
+                for criterion in route.criteria
+            )
+        ]
+        return filtered or list(routes)
+
+    def _dominant_cardinal_fallback(self, context: TurnContext) -> list[Route]:
+        """Use a single cardinal route for the best gene when cache is empty."""
+        best = self._inferred_best_gene(
+            context.recent_travelogs, context.rakshas, soma=context.soma,
+        )
+        for route in _CARDINAL_ROUTES:
+            if route.criteria[0].value == best:
+                return [route]
+        return []
 
     def select_send_pool(self, candidates: list[Raksha], context: TurnContext) -> list[Raksha]:
         """
@@ -578,6 +663,8 @@ class GenAlgStrategy(Strategy):
                 f"Turn 1 — launching full {ARCHETYPE_GRID_SIZE}-archetype scout."
                 f"{cardinal_note}"
             )
+        if self._epoch_shock_this_turn:
+            return f"Epoch shock — re-scouting with cardinal paths.{cardinal_note}"
         if not self._initial_scout_done:
             return f"Initial scout not yet completed — scouting now.{cardinal_note}"
         if context.recent_travelogs and survival < self.MASS_DEATH_THRESHOLD:
@@ -585,7 +672,7 @@ class GenAlgStrategy(Strategy):
                 f"Mass death detected ({survival:.0%} < {self.MASS_DEATH_THRESHOLD:.0%})"
                 f" — re-scouting for missing archetypes.{cardinal_note}"
             )
-        return "No mass death — switching to harvest mode."
+        return "No mass death — switching to harvest mode; replaying survivor paths when cached."
 
     def _narrate_send_repro_cull(
         self,
