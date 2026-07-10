@@ -781,6 +781,246 @@ sequenceDiagram
 
 ---
 
+# Game Loop & Tk Event Bridge
+
+Two runtime mechanisms keep the simulation alive: the **game loop** that advances turns, and the **event bridge** that pushes engine state into the Tk GUI without freezing it.
+
+---
+
+## 1. Game Loop
+
+### Big Idea
+
+The game loop is the heartbeat of the simulation. Each call to `Game.next_turn()` runs one complete turn for every civilization in sequence:
+
+1. **Strategy thinks** — `Strategy.decide()` runs in a daemon thread with a time budget (default 180 s). The engine waits for it, or reads whatever `StandingOrders` exist when the deadline fires.
+2. **Weed** — Rakshas matching `weed_criteria` (plus any forced by Soma deficit) are killed.
+3. **Trips** — Surviving Rakshas from `send_criteria` venture into the Labyrinth one by one; each result is merged back into the civilization's `known_map`.
+4. **Reproduce** — `reproduce_criteria` pairs survivors; children are ready next turn.
+5. **Sustenance** — 1 Soma per alive Raksha is deducted at turn end.
+6. **Epoch tick** — Labyrinth checks whether the epoch should rotate.
+7. **Persist** — `TurnSummary` + trip records are written to SQLite (if `db_path` is set).
+8. **Notify GUI** — `events.on_turn_end(summaries)` fires; the Tk bridge delivers it to widgets on the main thread.
+
+The loop is a plain `while current_turn < turns_total`. There is no hidden scheduler or coroutine — one blocking call = one turn.
+
+### Diagram: How It Works in the App
+
+```
+LabyrinthApp._advance_turn()
+        │
+        └─► daemon thread: _run_turn_worker()
+                    │
+                    └─► Game.next_turn()
+                              │
+                    ┌─────────▼──────────────────────────────────────────┐
+                    │  for each CivilizationState                        │
+                    │                                                    │
+                    │  ① strategy thread                                 │
+                    │       set_deadline(now + 180 s)                    │
+                    │       thread.start()  ← decide() writes orders     │
+                    │       thread.join(timeout=180 s)                   │
+                    │       read standing_orders (fresh or fallback)     │
+                    │                                                    │
+                    │  ② apply_weed(criteria) + mandatory_kill()         │
+                    │       if alive == 0 → mark_extinct                 │
+                    │                                                    │
+                    │  ③ for each raksha in send_pool:                   │
+                    │       labyrinth.run_trip(raksha)                   │
+                    │       events.on_trip_result(civ_id, result) ──────►│──► queue
+                    │       merge travelog → known_map                   │
+                    │                                                    │
+                    │  ④ apply_reproduce(criteria)                       │
+                    │                                                    │
+                    │  ⑤ deduct_sustenance()                             │
+                    └────────────────────────────────────────────────────┘
+                              │
+                    labyrinth.tick_epoch()
+                    repo.save_turn(...)
+                    events.on_turn_end(summaries) ──────────────────────► queue
+```
+
+### Detailed Example from Code
+
+`Game.next_turn()` is the single entry point — it increments the counter, fires the start event, and delegates per-civilization work:
+
+```130:185:labyrinth/game.py
+def next_turn(self) -> list[TurnSummary]:
+    ...
+    self.current_turn += 1
+    ...
+    for state in self.civilizations:
+        summary = run_turn_for_civilization(
+            state, self.labyrinth, self.current_turn, ...
+        )
+```
+
+Inside `run_turn_for_civilization`, the strategy thread + deadline contract enforces the 3-minute thinking budget:
+
+```261:272:labyrinth/engine/turn.py
+    deadline = time.time() + thinking_seconds
+    civ_state.strategy.set_deadline(deadline)
+
+    thread = threading.Thread(
+        target=_run_strategy_decide,
+        args=(civ_state, context),
+        daemon=True,
+    )
+    thread.start()
+    thread.join(timeout=thinking_seconds)
+
+    orders, used_fallback = _get_orders(civ_state, turn_number)
+```
+
+The **fallback rule** — if `decide()` never wrote `last_updated_turn` for this turn, the previous turn's orders are reused and a warning is logged:
+
+```142:153:labyrinth/engine/turn.py
+def _get_orders(state: CivilizationState, turn_number: int) -> tuple[StandingOrders, bool]:
+    """Return standing orders and whether fallback was used."""
+    orders = state.strategy.standing_orders
+    used_fallback = orders.last_updated_turn != turn_number
+    if used_fallback:
+        log.warning(
+            "strategy.deadline_used",
+            civilization=state.civilization.id,
+            turn=turn_number,
+            last_updated=orders.last_updated_turn,
+        )
+    return orders, used_fallback
+```
+
+---
+
+## 2. Tk Event Bridge
+
+### Big Idea
+
+Tkinter is fundamentally single-threaded: **only the main thread may touch widgets**. The game engine runs on a daemon thread. If it tried to update a `Canvas` directly it would crash or corrupt the display.
+
+The solution is a **thread-safe queue** (`queue.Queue`) paired with a **recurring Tk timer**:
+
+- The engine fires `GameEvents` callbacks from the worker thread.
+- Each callback calls `_dispatch(fn, *args)`, which puts `(fn, args)` into `_pending_main`.
+- Every 50 ms, `self.after(50, _pump_main_queue)` drains the queue on the **main thread** and calls the actual widget-update methods.
+
+`GameEvents` is a plain dataclass of callable fields — all no-op lambdas by default. This decouples the engine entirely from Tkinter; it works identically in tests with no GUI wired.
+
+### Diagram: How It Works in the App
+
+```
+Worker thread                           Queue (_pending_main)    Tk main thread
+──────────────────────────────────────  ──────────────────────   ─────────────────────────────────
+game.next_turn()                                                 mainloop() running
+  └─ events.on_trip_result(cid, r)  ──► put(_apply_trip_result)
+  └─ events.on_turn_end(summaries)  ──► put(_apply_turn_end)
+  └─ events.on_chapter(text)        ──► put(_apply_chapter)
+                                                                 after(50) fires → _pump_main_queue()
+                                                                   process_pending():
+                                                                     → _apply_trip_result(cid, r)
+                                                                         plot_tab.on_trip_result()
+                                                                     → _apply_turn_end(summaries)
+                                                                         plot_tab.on_turn_end()
+                                                                         civs_tab.on_turn_end()
+                                                                         commentary_tab.on_turn_end()
+                                                                     → _apply_chapter(text)
+                                                                         commentary_tab.on_chapter()
+                                                                 after(50) re-arms → loops forever
+```
+
+### Detailed Example from Code
+
+**Queue setup and the pump** — wired at app startup, before any game starts:
+
+```55:66:labyrinth/gui/app.py
+        self._pending_main: queue.Queue[tuple[object, tuple]] = queue.Queue()
+        ...
+        self.after(50, self._pump_main_queue)
+
+    def _pump_main_queue(self) -> None:
+        """Drain worker-thread callbacks on the Tk main thread."""
+        self.process_pending()
+        self.after(50, self._pump_main_queue)
+```
+
+`process_pending` drains the entire queue in one shot on each tick. `get_nowait()` is non-blocking; the `Empty` exception breaks the loop cleanly:
+
+```165:172:labyrinth/gui/app.py
+    def process_pending(self) -> None:
+        """Run callbacks queued from background worker threads."""
+        while True:
+            try:
+                fn, args = self._pending_main.get_nowait()
+            except queue.Empty:
+                break
+            fn(*args)
+```
+
+**The dispatch helper** — the thin write-side of the bridge, callable from any thread:
+
+```174:176:labyrinth/gui/app.py
+    def _dispatch(self, fn, *args) -> None:
+        """Queue a main-thread GUI update from a worker thread."""
+        self._pending_main.put((fn, args))
+```
+
+**Event wiring** — connects `GameEvents` callbacks (fired by the engine) to `_dispatch`:
+
+```178:185:labyrinth/gui/app.py
+    def _wire_events(self) -> None:
+        if self._events is None:
+            return
+        self._events.on_turn_start = lambda t, e: self._dispatch(self._apply_turn_start, t, e)
+        self._events.on_trip_result = lambda c, r: self._dispatch(self._apply_trip_result, c, r)
+        self._events.on_turn_end = lambda s: self._dispatch(self._apply_turn_end, s)
+        self._events.on_game_end = lambda s: self._dispatch(self._apply_game_end, s)
+        self._events.on_chapter = lambda t: self._dispatch(self._apply_chapter, t)
+```
+
+**`GameEvents`** — the decoupling contract that keeps the engine GUI-agnostic. All fields are callables, defaulting to no-op lambdas so the engine runs identically headless (in tests) or wired to a full GUI:
+
+```151:173:labyrinth/domain/entities.py
+@dataclass
+class GameEvents:
+    """Callback hooks decoupling engine from GUI."""
+
+    on_turn_start: object = None
+    on_trip_result: object = None
+    on_turn_end: object = None
+    on_game_end: object = None
+    on_chapter: object = None
+    on_civilization_extinct: object = None
+
+    def __post_init__(self) -> None:
+        if self.on_turn_start is None:
+            self.on_turn_start = lambda *_: None
+        if self.on_trip_result is None:
+            self.on_trip_result = lambda *_: None
+        if self.on_turn_end is None:
+            self.on_turn_end = lambda *_: None
+        if self.on_game_end is None:
+            self.on_game_end = lambda *_: None
+        if self.on_chapter is None:
+            self.on_chapter = lambda *_: None
+        if self.on_civilization_extinct is None:
+            self.on_civilization_extinct = lambda *_: None
+```
+
+The engine fires `events.on_trip_result(civ_id, result)` from `_execute_trips()` in `turn.py` as **each Raksha returns** — so the GUI map updates live, trip by trip, rather than only at turn end:
+
+```192:200:labyrinth/engine/turn.py
+    for raksha in to_send:
+        result = labyrinth.run_trip(raksha, rng)
+        results.append(result)
+        _merge_travelog(civ_state.civilization, result)
+        events.on_trip_result(civ_state.civilization.id, result)
+        if result.travelog.survived:
+            survived_count += 1
+        soma_gathered += result.travelog.soma_gathered
+        civ_state.civilization.soma += result.travelog.soma_gathered
+```
+
+---
+
 # Design Decisions
 
 | # | Topic | Decision |
