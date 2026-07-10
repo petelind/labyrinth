@@ -68,6 +68,9 @@ class GenAlgStrategy(Strategy):
             last_updated_turn=context.turn_number,
         ))
         if context.chronicler is not None:
+            context.chronicler.record_thinking(
+                self._build_thinking_narrative(context, counts)
+            )
             context.chronicler.record_reasoning(self._explain_decision(context, counts))
             context.chronicler.record_deliberation(self._summarize(context, counts))
 
@@ -427,6 +430,178 @@ class GenAlgStrategy(Strategy):
             Criterion(CriteriaField.TRIPS_SURVIVED, CriteriaOp.GTE, 1),
             Criterion(CriteriaField.ALIVE, CriteriaOp.EQ, True),
         ]
+
+    def _build_thinking_narrative(
+        self,
+        context: TurnContext,
+        counts: dict[GeneType, int],
+    ) -> str:
+        """
+        Build a step-by-step prose narrative of this turn's decision process.
+
+        Each conditional branch that influences the final standing orders adds
+        one sentence to the output, so the Commentary tab reads like the
+        strategy's inner monologue — mirroring how LLMStrategy emits thinking.
+
+        :param context: Current turn context (rakshas, soma, travelogs, …).
+        :param counts: Alive Rakshas grouped by dominant gene.
+        :return: Newline-separated prose; never empty (at minimum one sentence).
+        :raises: Never — pure function, no I/O, no mutation.
+
+        Example output::
+
+            Reviewing 8 travelogs: prior send survival 62%.
+            Population 45 < 70 with 22 turns left — conservation mode active.
+            Conservation mode engaged — skipping scout.
+            Best gene inferred from archetype aggregates: FIRE (71%).
+            Send criteria: harvesting FIRE dominant gene holders (71% survival).
+            Soma 400 vs 45 × 1.05 = 47 — reproduction paused: soma too low.
+            Population 45 within cap 60 — no culling needed.
+        """
+        parts = [
+            self._narrate_survival_and_conservation(context),
+            self._narrate_scout_or_harvest(context),
+            self._narrate_send_repro_cull(context, counts),
+        ]
+        return "\n".join(parts)
+
+    def _narrate_survival_and_conservation(self, context: TurnContext) -> str:
+        """
+        Narrate survival data and whether conservation mode is active.
+
+        :param context: Current turn context.
+        :return: Two-sentence prose (travelogs summary + conservation verdict).
+        """
+        survival = self._recent_send_survival(context.recent_travelogs)
+        n = len(context.recent_travelogs)
+        alive_count = sum(1 for r in context.rakshas if r.alive)
+        has_mass_death = bool(context.recent_travelogs) and survival < self.MASS_DEATH_THRESHOLD
+
+        line1 = f"Reviewing {n} travelogs: prior send survival {survival:.0%}."
+
+        if has_mass_death:
+            line2 = (
+                f"Mass death event ({survival:.0%}) — conservation suppressed to allow re-scout."
+            )
+        elif alive_count < self.CONSERVATION_POP and context.turns_remaining > 15:
+            line2 = (
+                f"Population {alive_count} < {self.CONSERVATION_POP} with "
+                f"{context.turns_remaining} turns left — conservation mode active."
+            )
+        else:
+            line2 = (
+                f"Population {alive_count} (≥ {self.CONSERVATION_POP} threshold or "
+                f"≤ 15 turns left) — conservation mode inactive."
+            )
+        return f"{line1}\n{line2}"
+
+    def _narrate_scout_or_harvest(self, context: TurnContext) -> str:
+        """
+        Narrate the scout-vs-harvest decision, tracing each branch of _needs_scout().
+
+        :param context: Current turn context.
+        :return: One-sentence prose explaining why scout or harvest was chosen.
+        """
+        survival = self._recent_send_survival(context.recent_travelogs)
+        has_mass_death = bool(context.recent_travelogs) and survival < self.MASS_DEATH_THRESHOLD
+        alive_count = sum(1 for r in context.rakshas if r.alive)
+        conservation = (
+            alive_count < self.CONSERVATION_POP
+            and context.turns_remaining > 15
+            and not has_mass_death
+        )
+
+        if conservation:
+            return "Conservation mode engaged — skipping scout."
+        if context.turn_number == 1:
+            return f"Turn 1 — launching full {ARCHETYPE_GRID_SIZE}-archetype scout."
+        if not self._initial_scout_done:
+            return "Initial scout not yet completed — scouting now."
+        if context.recent_travelogs and survival < self.MASS_DEATH_THRESHOLD:
+            return (
+                f"Mass death detected ({survival:.0%} < {self.MASS_DEATH_THRESHOLD:.0%})"
+                " — re-scouting for missing archetypes."
+            )
+        return "No mass death — switching to harvest mode."
+
+    def _narrate_send_repro_cull(
+        self,
+        context: TurnContext,
+        counts: dict[GeneType, int],
+    ) -> str:
+        """
+        Narrate send criteria, reproduction affordability, and population cull check.
+
+        :param context: Current turn context.
+        :param counts: Alive Rakshas grouped by dominant gene.
+        :return: Two or three lines of prose joined by newlines.
+        """
+        alive_count = sum(1 for r in context.rakshas if r.alive)
+        scouting = self._needs_scout(context)
+        lines: list[str] = []
+
+        lines.append(self._narrate_send_criteria(context, alive_count, scouting))
+
+        threshold = alive_count * self.REPRO_SOMA_FACTOR
+        if context.soma < threshold:
+            lines.append(
+                f"Soma {context.soma} vs {alive_count} × {self.REPRO_SOMA_FACTOR}"
+                f" = {threshold:.0f} — reproduction paused: soma too low."
+            )
+        else:
+            lines.append(
+                f"Soma {context.soma} vs {alive_count} × {self.REPRO_SOMA_FACTOR}"
+                f" = {threshold:.0f} — reproduction enabled."
+            )
+
+        if not scouting:
+            cap = self._population_cap(context)
+            excess = max(0, alive_count - cap)
+            if excess:
+                lines.append(
+                    f"Population {alive_count} exceeds cap {cap} — culling {excess} excess clones."
+                )
+            else:
+                lines.append(f"Population {alive_count} within cap {cap} — no culling needed.")
+
+        return "\n".join(lines)
+
+    def _narrate_send_criteria(
+        self,
+        context: TurnContext,
+        alive_count: int,
+        scouting: bool,
+    ) -> str:
+        """
+        Narrate the chosen send criteria in one sentence.
+
+        :param context: Current turn context.
+        :param alive_count: Number of living Rakshas (pre-computed by caller).
+        :param scouting: Whether scout mode is active this turn.
+        :return: One sentence describing the send criteria decision.
+        """
+        if scouting:
+            return "Send criteria: all alive dispatched for scout."
+        survival = self._recent_send_survival(context.recent_travelogs)
+        has_mass_death = bool(context.recent_travelogs) and survival < self.MASS_DEATH_THRESHOLD
+        conservation = (
+            alive_count < self.CONSERVATION_POP
+            and context.turns_remaining > 15
+            and not has_mass_death
+        )
+        if conservation:
+            return "Send criteria: conservation mode — only trip-tested survivors sent."
+        best = self._inferred_best_gene(
+            context.recent_travelogs, context.rakshas, soma=context.soma,
+        )
+        rates = self._dominant_rates_from_archetypes()
+        alive = [r for r in context.rakshas if r.alive]
+        if any(r.dna.dominant == best for r in alive):
+            return (
+                f"Send criteria: harvesting {best.name} dominant gene holders"
+                f" ({rates[best]:.0%} archetype survival)."
+            )
+        return f"Send criteria: {best.name} has no alive holders — sending all alive."
 
     def _explain_decision(
         self,
