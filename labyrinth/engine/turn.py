@@ -18,6 +18,7 @@ from labyrinth.domain.entities import (
     TripResult,
 )
 from labyrinth.engine.labyrinth import Labyrinth
+from labyrinth.engine.route_resolver import resolve_route_for_raksha
 from labyrinth.engine.reproduce import apply_reproduce
 from labyrinth.engine.weed import apply_mandatory_kill, apply_weed
 from labyrinth.logging_config import get_logger
@@ -190,7 +191,8 @@ def _execute_trips(
     results: list[TripResult] = []
 
     for raksha in to_send:
-        result = labyrinth.run_trip(raksha, rng)
+        path = resolve_route_for_raksha(raksha, orders.routes)
+        result = labyrinth.run_trip(raksha, rng, path=path)
         results.append(result)
         _merge_travelog(civ_state.civilization, result)
         events.on_trip_result(civ_state.civilization.id, result)

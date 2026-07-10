@@ -7,6 +7,7 @@ import random
 import pytest
 
 from labyrinth.domain.entities import DNA, Raksha
+from labyrinth.domain.grid import is_perimeter_square
 from labyrinth.domain.types import CENTER_SQUARES, GeneType, TRIP_MAX_STEPS
 from labyrinth.engine.labyrinth import DOMINANT_TRAP_RATIO, Labyrinth, TRAP_DENSITY
 from uuid import uuid4
@@ -18,6 +19,17 @@ def _raksha(dominant: GeneType, secondary: GeneType = GeneType.WATER) -> Raksha:
         civilization_id="civ-1",
         dna=DNA(dominant=dominant, secondary=secondary, recessive=GeneType.EARTH),
     )
+
+
+def _left_to_center_path() -> list[tuple[int, int]]:
+    """Standard left-edge path to center square (49, 49)."""
+    return [(0, 49)] + [(x, 49) for x in range(1, 50)]
+
+
+def _clear_path_traps(lab: Labyrinth, path: list[tuple[int, int]]) -> None:
+    """Remove traps on path coordinates so trip tests are deterministic."""
+    for pos in path:
+        lab.grid[pos] = None
 
 
 class TestLabyrinthGeneration:
@@ -91,22 +103,54 @@ class TestRunTrip:
     def test_center_path_grants_soma(self, seeded_rng: random.Random) -> None:
         lab = Labyrinth.create(seeded_rng)
         r = _raksha(GeneType.FIRE)
-        center = next(iter(CENTER_SQUARES))
-        result = lab.run_trip(r, seeded_rng, path=[center])
+        path = _left_to_center_path()
+        _clear_path_traps(lab, path)
+        center = (49, 49)
+        result = lab.run_trip(r, seeded_rng, path=path)
         assert result.travelog.soma_gathered >= 1
         assert result.travelog.survived is True
+        assert center in result.travelog.path
 
     def test_step_limit_returns_alive(self, seeded_rng: random.Random) -> None:
         lab = Labyrinth.create(seeded_rng, dominant=GeneType.FIRE)
         r = _raksha(GeneType.FIRE)
-        free_pos = next(
-            (x, y)
-            for x in range(100)
-            for y in range(100)
-            if lab.get_trap(x, y) is None and (x, y) not in CENTER_SQUARES
-        )
-        path = [free_pos] * TRIP_MAX_STEPS
+        path: list[tuple[int, int]] = [(0, 0)]
+        for _ in range(TRIP_MAX_STEPS - 1):
+            prev_x, prev_y = path[-1]
+            if prev_x < 99:
+                path.append((prev_x + 1, prev_y))
+            else:
+                path.append((prev_x - 1, prev_y))
         result = lab.run_trip(r, seeded_rng, path=path)
         assert result.travelog.hit_step_limit is True
         assert result.travelog.survived is True
         assert result.died is False
+
+    def test_naive_walk_starts_on_perimeter_without_path_or_start(self) -> None:
+        rng = random.Random(7)
+        lab = Labyrinth.create(rng, dominant=GeneType.FIRE)
+        r = _raksha(GeneType.FIRE)
+        result = lab.run_trip(r, rng)
+        assert result.travelog.path
+        first = result.travelog.path[0]
+        assert is_perimeter_square(first[0], first[1])
+
+    def test_prescribed_path_from_perimeter_reaches_center_for_soma(self, seeded_rng: random.Random) -> None:
+        lab = Labyrinth.create(seeded_rng, dominant=GeneType.FIRE)
+        r = _raksha(GeneType.FIRE)
+        center = (49, 49)
+        path = _left_to_center_path()
+        _clear_path_traps(lab, path)
+        result = lab.run_trip(r, seeded_rng, path=path)
+        assert result.travelog.soma_gathered >= 1
+        assert is_perimeter_square(result.travelog.path[0][0], result.travelog.path[0][1])
+        assert center in result.travelog.path
+
+    def test_invalid_prescribed_path_falls_back_to_perimeter_walk(self) -> None:
+        rng = random.Random(11)
+        lab = Labyrinth.create(rng, dominant=GeneType.FIRE)
+        r = _raksha(GeneType.FIRE)
+        invalid_path = [(50, 50), (51, 50)]
+        result = lab.run_trip(r, rng, path=invalid_path)
+        assert result.travelog.path
+        assert is_perimeter_square(result.travelog.path[0][0], result.travelog.path[0][1])

@@ -332,7 +332,7 @@ class SquareRecord:
     trap_type:  GeneType | None  # None = free passage
     is_center:  bool = False
 
-TRIP_MAX_STEPS: int = 50  # hard cap for naive random walk on 100×100 grid
+TRIP_MAX_STEPS: int = 200  # hard cap for trips on 100×100 grid
 
 @dataclass
 class Travelog:
@@ -543,6 +543,7 @@ class StandingOrders:
     weed_criteria:          list[Criterion] = field(default_factory=list)
     send_criteria:          list[Criterion] = field(default_factory=list)
     reproduce_criteria:     list[Criterion] = field(default_factory=list)
+    routes:                 list[Route]     = field(default_factory=list)  # criteria → path
     current_strategy_sumup: str             = ""
     last_updated_turn:      int             = -1   # -1 = never written
 ```
@@ -743,8 +744,8 @@ sequenceDiagram
                 else
                     G->>S: select_send_pool(candidates, context)
                     loop for each Raksha in send pool [parallel]
-                        G->>L: run_trip(raksha, path or naive_random_walk)
-                        loop each step (x,y) up to TRIP_MAX_STEPS=50
+                        G->>L: run_trip(raksha, path or perimeter random walk)
+                        loop each step (x,y) up to TRIP_MAX_STEPS=200
                             L->>L: resolve_trap(square, raksha.dna)
                             alt trap death
                                 L-->>G: TripResult(died, partial_travelog)
@@ -1009,7 +1010,8 @@ The engine fires `events.on_trip_result(civ_id, result)` from `_execute_trips()`
 
 ```192:200:labyrinth/engine/turn.py
     for raksha in to_send:
-        result = labyrinth.run_trip(raksha, rng)
+        path = resolve_route_for_raksha(raksha, orders.routes)
+        result = labyrinth.run_trip(raksha, rng, path=path)
         results.append(result)
         _merge_travelog(civ_state.civilization, result)
         events.on_trip_result(civ_state.civilization.id, result)
@@ -1026,7 +1028,8 @@ The engine fires `events.on_trip_result(civ_id, result)` from `_execute_trips()`
 | # | Topic | Decision |
 |---|---|---|
 | 1 | Trap distribution | **Fixed at epoch start.** 10% of squares are traps; 75% of traps match the epoch dominant type, remainder split among other types. Center squares always free. Layout re-rolled on epoch change. |
-| 2 | Trip length limit | **`TRIP_MAX_STEPS = 50`** (hard cap). If reached without trap death, Raksha **returns home alive** with partial `Travelog`, `hit_step_limit=True`, `survived=True`, and zero Soma. |
+| 2 | Trip length limit | **`TRIP_MAX_STEPS = 200`** (hard cap). If reached without trap death, Raksha **returns home alive** with partial `Travelog`, `hit_step_limit=True`, `survived=True`, and zero Soma. |
+| 2b | Trip entry | Rakshas **enter from a random perimeter square** (x=0, x=99, y=0, or y=99). Strategies may prescribe **routes** (criteria → cardinal path); unmatched Rakshas random-walk from the perimeter. |
 | 3 | Trip parallelism | **All civilizations' trips run simultaneously** in parallel thread pools. GUI updates fire as individual trip results arrive from any civilization. |
 | 4 | DNA inheritance | Child draws one gene from `{parent_a.dominant, parent_a.secondary}` and one from `{parent_b.dominant, parent_b.secondary}`; assignment to child's dominant/secondary is random. Recessive drawn randomly from the union of both parents' three genes, excluding the two already assigned. |
 | 5 | Mandatory weed enforcement | If `weed_criteria` leaves a Soma deficit after the strategy's orders are applied, Game auto-kills additional Rakshas in ascending order of `(trips_survived, trips_completed)` until the deficit is covered. |

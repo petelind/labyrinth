@@ -10,16 +10,25 @@ import tkinter as tk
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from uuid import uuid4
 
-from labyrinth.domain.entities import GameEvents
-from labyrinth.game import Game, GameConfig
+from labyrinth.domain.archetypes import INITIAL_RAKSHAS
+from labyrinth.domain.entities import Civilization, DNA, Epoch, GameEvents, Raksha
+from labyrinth.domain.types import GeneType
+from labyrinth.engine.labyrinth import Labyrinth
+from labyrinth.engine.turn import CivilizationState
+from labyrinth.game import Game, GameConfig, initial_soma
 from labyrinth.gui.tab_civs import CivilizationsTab
 from labyrinth.gui.tab_commentary import CommentaryTab
 from labyrinth.gui.tab_plot import PlotTab
+from labyrinth.persistence.repo import GameRepository
+from labyrinth.replay import ReplayPlayer
 from labyrinth.strategy.gen_alg import GenAlgStrategy
 from labyrinth.strategy.llm import LLMStrategy
 
 log = logging.getLogger(__name__)
+
+_DUMMY_DNA = DNA(dominant=GeneType.FIRE, secondary=GeneType.FIRE, recessive=GeneType.FIRE)
 
 TEST_THINKING_SECONDS = 0.1
 TEST_AUTO_ADVANCE_MS = 100
@@ -32,6 +41,7 @@ class LabyrinthApp(tk.Tk):
         self,
         db_path: Path | None = None,
         test_mode: bool = False,
+        game_seed: int | None = None,
     ) -> None:
         super().__init__()
         self.title("Labyrinth Simulation")
@@ -39,6 +49,7 @@ class LabyrinthApp(tk.Tk):
         self.minsize(900, 600)
 
         self._test_mode = test_mode
+        self._game_seed = game_seed
         self._injected_db_path = db_path
         self._save_path: Path | None = None
         self._plot_tab: PlotTab | None = None
@@ -49,6 +60,8 @@ class LabyrinthApp(tk.Tk):
         self._simulation_started = False
         self._stopped = False
         self._turn_in_progress = False
+        self._is_replay_mode: bool = False
+        self._replay_player: ReplayPlayer | None = None
         self._turns_var = tk.IntVar(value=20)
         self._game: Game | None = None
         self._events: GameEvents | None = None
@@ -119,7 +132,7 @@ class LabyrinthApp(tk.Tk):
     def _create_game(self, turns_total: int) -> tuple[Game, GameEvents]:
         events = GameEvents()
         thinking_seconds = TEST_THINKING_SECONDS if self._test_mode else 180
-        seed = 42 if self._test_mode else 42
+        seed = self._game_seed if self._game_seed is not None else 42
         game = Game.create(
             self._civilization_specs(),
             GameConfig(
@@ -132,20 +145,33 @@ class LabyrinthApp(tk.Tk):
         )
         return game, events
 
-    def _build_game_ui(self) -> None:
-        if self._game is None:
-            raise RuntimeError("Game must be created before building the UI")
+    def _build_game_ui(
+        self,
+        labyrinth: Labyrinth | None = None,
+        civilizations: list | None = None,
+    ) -> None:
+        """
+        Build the notebook UI.
+
+        When ``labyrinth`` and ``civilizations`` are given (replay mode) they
+        are used directly instead of reading from ``self._game``.
+        """
+        if labyrinth is None or civilizations is None:
+            if self._game is None:
+                raise RuntimeError("Game must be created before building the UI")
+            labyrinth = self._game.labyrinth
+            civilizations = self._game.civilizations
 
         self._notebook = ttk.Notebook(self)
         auto_ms = TEST_AUTO_ADVANCE_MS if self._test_mode else 1500
 
         self._plot_tab = PlotTab(
             self._notebook,
-            self._game.labyrinth,
-            self._game.civilizations,
+            labyrinth,
+            civilizations,
             auto_advance_ms=auto_ms,
         )
-        self._civs_tab = CivilizationsTab(self._notebook, self._game.civilizations)
+        self._civs_tab = CivilizationsTab(self._notebook, civilizations)
         self._commentary_tab = CommentaryTab(
             self._notebook,
             log_dispatch=self._dispatch,
@@ -161,6 +187,7 @@ class LabyrinthApp(tk.Tk):
         self._plot_tab.bind_stop(self._stop_simulation)
         self._plot_tab.bind_reset(self._reset_simulation)
         self._commentary_tab.bind_save(self.save_game)
+        self._commentary_tab.bind_load(self.load_game)
 
     def process_pending(self) -> None:
         """Run callbacks queued from background worker threads."""
@@ -210,6 +237,12 @@ class LabyrinthApp(tk.Tk):
             text="Start Simulation",
             command=self.start_simulation,
         ).pack(pady=20)
+
+        ttk.Button(
+            self._start_screen,
+            text="Load Game",
+            command=self.load_game,
+        ).pack(pady=4)
 
     def _parse_turns_total(self) -> int | None:
         """Validate turns entered on the start screen."""
@@ -307,7 +340,142 @@ class LabyrinthApp(tk.Tk):
         self._simulation_started = False
         self._stopped = False
         self._turn_in_progress = False
+        self._is_replay_mode = False
+        self._replay_player = None
         self._build_start_screen()
+
+    def load_game(self) -> None:
+        """Open a file dialog to pick a save DB and enter replay mode."""
+        if self._turn_in_progress:
+            if not self._test_mode:
+                messagebox.showinfo(
+                    "Busy",
+                    "Stop simulation to load/start another one.",
+                )
+            return
+        if self._simulation_started and not self._stopped:
+            if not self._test_mode:
+                messagebox.showinfo(
+                    "Simulation Running",
+                    "Stop simulation to load/start another one.",
+                )
+            return
+
+        db_path_str = filedialog.askopenfilename(
+            title="Load Game",
+            filetypes=[("SQLite database", "*.db")],
+        )
+        if not db_path_str:
+            return
+        self._enter_replay_mode(Path(db_path_str))
+
+    def _enter_replay_mode(self, db_path: Path) -> None:
+        """
+        Tear down any existing UI and rebuild in replay mode from a save file.
+
+        :param db_path: Path to the SQLite save to replay.
+        """
+        try:
+            turns_total, civ_infos, frames = GameRepository.load_replay_data(db_path)
+        except Exception as exc:
+            log.exception("replay.load_failed", path=str(db_path))
+            if not self._test_mode:
+                messagebox.showerror("Load Failed", str(exc))
+            return
+
+        if not frames:
+            if not self._test_mode:
+                messagebox.showwarning("Empty Game", "No turns found in the saved game.")
+            return
+
+        # Tear down any running UI
+        if self._plot_tab is not None:
+            self._plot_tab.cancel_auto_advance()
+        if self._notebook is not None:
+            self._notebook.pack_forget()
+            self._notebook.destroy()
+            self._notebook = None
+        self._plot_tab = None
+        self._civs_tab = None
+        self._commentary_tab = None
+        self._game = None
+        if self._start_screen is not None:
+            self._start_screen.destroy()
+            self._start_screen = None
+
+        # Build shared Civilization objects from saved names
+        start_soma = initial_soma(turns_total)
+        civ_states: list[CivilizationState] = []
+        civ_map: dict[str, Civilization] = {}
+        for civ_id, civ_name in civ_infos:
+            dummy_rakshas = [
+                Raksha(id=uuid4(), civilization_id=civ_id, dna=_DUMMY_DNA)
+                for _ in range(INITIAL_RAKSHAS)
+            ]
+            civ = Civilization(id=civ_id, name=civ_name, soma=start_soma, rakshas=dummy_rakshas)
+            civ_states.append(CivilizationState(civilization=civ, strategy=GenAlgStrategy()))
+            civ_map[civ_id] = civ
+
+        # Build a Labyrinth shell initialised from the first recorded epoch
+        first_frame = frames[0]
+        replay_labyrinth = Labyrinth(
+            grid=dict(first_frame.grid),
+            current_epoch=Epoch(
+                dominant_type=first_frame.epoch_dominant,
+                turns_remaining=first_frame.epoch_turns_remaining,
+                length=first_frame.epoch_length,
+            ),
+        )
+
+        # Wire events and create the replay player
+        self._events = GameEvents()
+        self._replay_player = ReplayPlayer(
+            frames=frames,
+            labyrinth=replay_labyrinth,
+            civ_map=civ_map,
+            events=self._events,
+        )
+
+        # Build UI (reuses existing notebook machinery)
+        self._build_game_ui(labyrinth=replay_labyrinth, civilizations=civ_states)
+
+        if self._notebook is not None:
+            self._notebook.pack(fill=tk.BOTH, expand=True)
+
+        self._simulation_started = True
+        self._stopped = False
+        self._turn_in_progress = False
+        self._is_replay_mode = True
+
+        if self._plot_tab is not None:
+            self._plot_tab.set_replay_mode(True)
+            # Replay Turn uses _replay_turn, not _advance_turn
+            self._plot_tab.bind_next_turn(self._replay_turn)
+            self._plot_tab.set_stopped(False)
+            self._plot_tab.draw_initial_state()
+
+        total = self._replay_player.total_turns
+        if self._commentary_tab is not None:
+            self._commentary_tab.append_message(
+                f"[Replay] Loaded {total} turns from {db_path.name}"
+            )
+        log.info("replay.mode_entered", turns=total, path=str(db_path))
+
+    def _replay_turn(self) -> None:
+        """Advance one replay frame synchronously (no background thread)."""
+        if self._replay_player is None or not self._replay_player.has_next:
+            return
+
+        self._replay_player.advance()
+
+        if not self._replay_player.has_next:
+            if self._plot_tab is not None:
+                self._plot_tab.set_stopped(True)
+            if self._commentary_tab is not None:
+                self._commentary_tab.append_message("[Replay] Reached the end of the recording.")
+        else:
+            if self._plot_tab is not None:
+                self._plot_tab.schedule_auto_advance()
 
     def _apply_turn_start(self, turn: int, epoch) -> None:
         if self._plot_tab:

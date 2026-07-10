@@ -55,6 +55,8 @@ class CommentaryTab(ttk.Frame):
         ttk.Label(nav, text="Strategy Commentary").pack(side=tk.LEFT)
         self._save_btn = ttk.Button(nav, text="Save Game")
         self._save_btn.pack(side=tk.RIGHT)
+        self._load_btn = ttk.Button(nav, text="Load Game")
+        self._load_btn.pack(side=tk.RIGHT, padx=(0, 4))
 
         self._text = scrolledtext.ScrolledText(self, state=tk.DISABLED, height=30)
         self._text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
@@ -68,10 +70,19 @@ class CommentaryTab(ttk.Frame):
         """Wire Save Game button to an export callback."""
         self._save_btn.configure(command=callback)
 
+    def bind_load(self, callback) -> None:
+        """Wire Load Game button to an import/replay callback."""
+        self._load_btn.configure(command=callback)
+
     @property
     def save_button(self) -> ttk.Button:
         """Save Game button widget."""
         return self._save_btn
+
+    @property
+    def load_button(self) -> ttk.Button:
+        """Load Game button widget."""
+        return self._load_btn
 
     def append_message(self, message: str) -> None:
         """Append a line to the commentary log."""

@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import re
 
-from labyrinth.domain.entities import StandingOrders
+from labyrinth.domain.entities import Route, StandingOrders
+from labyrinth.domain.grid import validate_prescribed_path
 from labyrinth.domain.types import Criterion, CriteriaField, CriteriaOp, GeneType
+from labyrinth.logging_config import get_logger
+
+log = get_logger(__name__)
 
 _THINK_BLOCK_RE = re.compile(
     r"<\s*think\s*>.*?<\s*/\s*think\s*>",
@@ -75,6 +79,74 @@ def parse_criterion(raw: dict) -> Criterion | None:
     return Criterion(field=field, op=op, value=value)
 
 
+def parse_route(raw: dict) -> Route | None:
+    """
+    Parse one criteria-mapped route from LLM JSON.
+
+    :param raw: Route object with ``criteria`` and ``path`` keys.
+    :return: Validated Route or None if invalid.
+    """
+    raw_criteria = raw.get("criteria")
+    if not isinstance(raw_criteria, list) or not raw_criteria:
+        return None
+
+    criteria: list[Criterion] = []
+    for item in raw_criteria:
+        if not isinstance(item, dict):
+            return None
+        criterion = parse_criterion(item)
+        if criterion is None:
+            return None
+        criteria.append(criterion)
+
+    raw_path = raw.get("path")
+    if not isinstance(raw_path, list) or not raw_path:
+        return None
+
+    coords: list[tuple[int, int]] = []
+    for step in raw_path:
+        if not isinstance(step, list) or len(step) != 2:
+            return None
+        x, y = step[0], step[1]
+        if not isinstance(x, int) or not isinstance(y, int):
+            return None
+        coords.append((x, y))
+
+    validated = validate_prescribed_path(coords)
+    if validated is None:
+        return None
+
+    return Route(
+        criteria=tuple(criteria),
+        path=tuple(validated),
+    )
+
+
+def parse_routes(data: dict) -> tuple[list[Route], int]:
+    """
+    Parse routes array from LLM JSON, dropping invalid entries.
+
+    :param data: Parsed standing-orders JSON object.
+    :return: Tuple of valid routes and count of dropped entries.
+    """
+    raw_routes = data.get("routes")
+    if not isinstance(raw_routes, list):
+        return [], 0
+
+    routes: list[Route] = []
+    dropped = 0
+    for item in raw_routes:
+        if not isinstance(item, dict):
+            dropped += 1
+            continue
+        route = parse_route(item)
+        if route is None:
+            dropped += 1
+            continue
+        routes.append(route)
+    return routes, dropped
+
+
 def parse_standing_orders(text: str, turn_number: int) -> StandingOrders | None:
     """
     Parse standing orders from complete model output (post-stream).
@@ -91,18 +163,27 @@ def parse_standing_orders(text: str, turn_number: int) -> StandingOrders | None:
     weed = [c for r in data.get("weed_criteria", []) if (c := parse_criterion(r))]
     send = [c for r in data.get("send_criteria", []) if (c := parse_criterion(r))]
     repro = [c for r in data.get("reproduce_criteria", []) if (c := parse_criterion(r))]
+    routes, dropped = parse_routes(data)
 
     if not any([weed, send, repro]):
         return None
 
     sumup = data.get("strategy_sumup", "") or data.get("reasoning", "")
-    return StandingOrders(
+    orders = StandingOrders(
         weed_criteria=weed,
         send_criteria=send,
         reproduce_criteria=repro,
+        routes=routes,
         current_strategy_sumup=str(sumup),
         last_updated_turn=turn_number,
     )
+    if dropped:
+        log.debug(
+            "strategy.routes_parsed",
+            count=len(routes),
+            dropped=dropped,
+        )
+    return orders
 
 
 def extract_reasoning_field(text: str) -> str:

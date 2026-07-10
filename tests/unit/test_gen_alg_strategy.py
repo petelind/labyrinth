@@ -7,10 +7,12 @@ from uuid import uuid4
 
 from labyrinth.domain.archetypes import all_archetype_dnas
 from labyrinth.domain.entities import DNA, Epoch, Raksha, Travelog, TurnContext
-from labyrinth.domain.types import CriteriaField, CriteriaOp, GeneType
+from labyrinth.domain.grid import is_perimeter_square, validate_prescribed_path
+from labyrinth.domain.types import CENTER_SQUARES, CriteriaField, CriteriaOp, GeneType
+from labyrinth.engine.route_resolver import resolve_route_for_raksha
 from labyrinth.game import _create_initial_rakshas
 from labyrinth.narrative import TurnChronicler
-from labyrinth.strategy.gen_alg import GenAlgStrategy
+from labyrinth.strategy.gen_alg import GenAlgStrategy, _CARDINAL_ROUTES, _cardinal_path_to_center
 
 
 def _raksha(dominant: GeneType, secondary: GeneType = GeneType.WATER) -> Raksha:
@@ -31,6 +33,64 @@ def _context(rakshas: list[Raksha], turn: int = 1, travelogs: list[Travelog] | N
         known_map={},
         turns_remaining=19,
     )
+
+
+class TestCardinalScoutRoutes:
+    """Cardinal paths assigned during scout turns only."""
+
+    def test_cardinal_routes_count_and_criteria(self) -> None:
+        assert len(_CARDINAL_ROUTES) == 4
+        genes = {
+            route.criteria[0].value
+            for route in _CARDINAL_ROUTES
+            if route.criteria[0].field == CriteriaField.GENE_DOMINANT
+        }
+        assert genes == set(GeneType)
+
+    def test_cardinal_paths_are_valid_and_reach_center(self) -> None:
+        expected_starts = {
+            GeneType.FIRE: (0, 50),
+            GeneType.WATER: (99, 50),
+            GeneType.EARTH: (50, 0),
+            GeneType.AIR: (50, 99),
+        }
+        for route in _CARDINAL_ROUTES:
+            gene = route.criteria[0].value
+            assert isinstance(gene, GeneType)
+            validated = validate_prescribed_path(route.path)
+            assert validated is not None
+            assert route.path[0] == expected_starts[gene]
+            assert is_perimeter_square(route.path[0][0], route.path[0][1])
+            assert route.path[-1] in CENTER_SQUARES
+            assert len(route.path) == 50
+
+    def test_cardinal_path_helper_builds_straight_line(self) -> None:
+        path = _cardinal_path_to_center((0, 50), (49, 50))
+        assert path == tuple((x, 50) for x in range(50))
+
+    def test_scout_standing_orders_include_cardinal_routes(self) -> None:
+        rakshas = _create_initial_rakshas("civ-1", random.Random(42))
+        strategy = GenAlgStrategy()
+        strategy.set_deadline(__import__("time").time() + 180)
+        strategy.decide(_context(rakshas, turn=1))
+        assert len(strategy.standing_orders.routes) == 4
+
+    def test_harvest_standing_orders_have_no_routes(self) -> None:
+        rakshas = [_raksha(GeneType.FIRE) for _ in range(80)]
+        rakshas += [_raksha(GeneType.WATER) for _ in range(80)]
+        logs = [Travelog(rakshas[0].id, [(0, 0)], {}, 5, True)]
+        strategy = GenAlgStrategy()
+        strategy._initial_scout_done = True
+        strategy.set_deadline(__import__("time").time() + 180)
+        strategy.decide(_context(rakshas, travelogs=logs, turn=2))
+        assert strategy.standing_orders.routes == []
+
+    def test_resolve_route_matches_dominant_gene(self) -> None:
+        fire_raksha = _raksha(GeneType.FIRE, GeneType.WATER)
+        path = resolve_route_for_raksha(fire_raksha, _CARDINAL_ROUTES)
+        assert path is not None
+        assert path[0] == (0, 50)
+        assert path[-1] in CENTER_SQUARES
 
 
 class TestGenAlgStrategy:
@@ -150,6 +210,7 @@ class TestThinkingNarrative:
         narrative = strategy._build_thinking_narrative(ctx, counts)
         assert "Turn 1" in narrative
         assert "scout" in narrative.lower()
+        assert "cardinal paths" in narrative.lower()
 
     def test_narrative_harvest_mode(self) -> None:
         """After initial scout with healthy survival, narrative must say 'harvest'."""

@@ -6,6 +6,11 @@ import random
 from dataclasses import dataclass, field
 
 from labyrinth.domain.entities import Epoch, Raksha, SquareRecord, Travelog, TripResult
+from labyrinth.domain.grid import (
+    is_perimeter_square,
+    random_perimeter_start,
+    validate_prescribed_path,
+)
 from labyrinth.domain.types import (
     CENTER_SQUARES,
     GeneType,
@@ -16,7 +21,7 @@ from labyrinth.logging_config import get_logger
 
 log = get_logger(__name__)
 
-TRAP_DENSITY = 0.10
+TRAP_DENSITY = 0.025
 DOMINANT_TRAP_RATIO = 0.75
 SOMA_REWARD_MIN = 25
 SOMA_REWARD_MAX = 100
@@ -184,15 +189,45 @@ class Labyrinth:
         :param raksha: Raksha to send.
         :param rng: Injectable RNG.
         :param path: Optional explicit path; naive random walk if None.
-        :param start: Starting coordinates; random if None.
+        :param start: Starting coordinates for random walk; random perimeter if None.
         :return: TripResult with travelog.
         """
-        if start is None:
-            start = (rng.randint(0, LABYRINTH_SIZE - 1), rng.randint(0, LABYRINTH_SIZE - 1))
-        log.debug("trip.started", raksha_id=str(raksha.id), has_path=path is not None)
+        validated_path: list[tuple[int, int]] | None = None
+        if path is not None:
+            validated_path = validate_prescribed_path(path)
+            if validated_path is None:
+                log.warning(
+                    "trip.invalid_path_fallback",
+                    raksha_id=str(raksha.id),
+                    path_len=len(path),
+                )
+
+        use_path = validated_path is not None
+        if not use_path:
+            if start is None:
+                start = random_perimeter_start(rng)
+            start_x, start_y = start
+            log.debug(
+                "trip.started",
+                raksha_id=str(raksha.id),
+                has_path=False,
+                start_x=start_x,
+                start_y=start_y,
+                start_on_perimeter=is_perimeter_square(start_x, start_y),
+            )
+        else:
+            first_x, first_y = validated_path[0]
+            log.debug(
+                "trip.started",
+                raksha_id=str(raksha.id),
+                has_path=True,
+                start_x=first_x,
+                start_y=first_y,
+                start_on_perimeter=True,
+            )
+
         visited: list[tuple[int, int]] = []
         squares: dict[tuple[int, int], SquareRecord] = {}
-        x, y = start
         soma_gathered = 0
         survived = True
         hit_step_limit = False
@@ -205,8 +240,8 @@ class Labyrinth:
             )
             visited.append((px, py))
 
-        if path:
-            steps = path[:TRIP_MAX_STEPS]
+        if use_path:
+            steps = validated_path[:TRIP_MAX_STEPS]
             for px, py in steps:
                 _record_step(px, py)
                 if not self.resolve_trap(raksha, self.get_trap(px, py), rng):
@@ -220,8 +255,8 @@ class Labyrinth:
                 hit_step_limit = True
                 log.debug("trip.step_limit", raksha_id=str(raksha.id), steps=TRIP_MAX_STEPS)
         else:
+            x, y = start
             for step in range(TRIP_MAX_STEPS):
-                x, y = self._naive_step(x, y, rng)
                 _record_step(x, y)
                 if not self.resolve_trap(raksha, self.get_trap(x, y), rng):
                     survived = False
@@ -231,6 +266,8 @@ class Labyrinth:
                     soma_gathered = rng.randint(SOMA_REWARD_MIN, SOMA_REWARD_MAX)
                     log.info("trip.center_reached", raksha_id=str(raksha.id), soma=soma_gathered)
                     break
+                if step < TRIP_MAX_STEPS - 1:
+                    x, y = self._naive_step(x, y, rng)
             else:
                 hit_step_limit = True
                 log.debug("trip.step_limit", raksha_id=str(raksha.id), steps=TRIP_MAX_STEPS)

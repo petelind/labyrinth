@@ -92,6 +92,7 @@ class LLMStrategy(Strategy):
                 civilization=civ_name,
                 weed=format_criteria(parsed_orders.weed_criteria),
                 send=format_criteria(parsed_orders.send_criteria),
+                routes=len(parsed_orders.routes),
                 thinking_chars=len(self.last_thinking),
                 reasoning=self.last_reasoning[:200],
                 blackboard=self._blackboard,

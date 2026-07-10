@@ -8,12 +8,34 @@ from tkinter import ttk
 from labyrinth.domain.entities import CivilizationStatus, Epoch, TripResult
 from labyrinth.domain.types import CENTER_SQUARES, LABYRINTH_SIZE
 from labyrinth.engine.labyrinth import Labyrinth
+from labyrinth.gui.civ_palette import CIV_PALETTES
 
-# Distinct palettes per civilization for the combined overlay map.
-CIV_PALETTES: tuple[dict[str, str], ...] = (
-    {"free": "#3498db", "trap": "#e74c3c", "center": "#f39c12"},
-    {"free": "#2ecc71", "trap": "#9b59b6", "center": "#e67e22"},
-)
+
+class _PairedMapCanvases(ttk.Frame):
+    """Two labyrinth canvases forced to the same square size."""
+
+    def __init__(self, master, actual_bg: str, overlay_bg: str) -> None:
+        super().__init__(master)
+        self._actual_canvas = tk.Canvas(self, bg=actual_bg, highlightthickness=0)
+        self._overlay_canvas = tk.Canvas(self, bg=overlay_bg, highlightthickness=0)
+        self.bind("<Configure>", self._on_resize)
+
+    @property
+    def actual_canvas(self) -> tk.Canvas:
+        return self._actual_canvas
+
+    @property
+    def overlay_canvas(self) -> tk.Canvas:
+        return self._overlay_canvas
+
+    def _on_resize(self, event: tk.Event) -> None:
+        half_width = max(event.width // 2, 1)
+        side = max(min(half_width, event.height), 1)
+        y0 = (event.height - side) // 2
+        left_x0 = (half_width - side) // 2
+        right_x0 = half_width + (half_width - side) // 2
+        self._actual_canvas.place(x=left_x0, y=y0, width=side, height=side)
+        self._overlay_canvas.place(x=right_x0, y=y0, width=side, height=side)
 
 
 class PlotTab(ttk.Frame):
@@ -36,6 +58,7 @@ class PlotTab(ttk.Frame):
         self._current_epoch: Epoch | None = None
         self._stopped = False
         self._turn_busy = False
+        self._is_replay_mode: bool = False
         self._auto_after_id: str | None = None
         self._next_turn_callback = None
         self._civ_stat_labels: list[ttk.Label] = []
@@ -48,25 +71,28 @@ class PlotTab(ttk.Frame):
         ttk.Label(header, textvariable=self._epoch_var).pack(side=tk.LEFT, padx=12)
         ttk.Label(header, textvariable=self._status_var).pack(side=tk.LEFT, padx=12)
 
-        body = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
-        body.pack(fill=tk.BOTH, expand=True)
+        body = ttk.Frame(self)
+        body.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        left = ttk.Frame(body)
-        body.add(left, weight=2)
-        ttk.Label(left, text="Actual Labyrinth").pack()
-        self._actual_canvas = tk.Canvas(left, bg="#1a1a2e", highlightthickness=0)
-        self._actual_canvas.pack(fill=tk.BOTH, expand=True)
-        self._actual_canvas.bind("<Configure>", self._on_actual_canvas_resize)
+        maps = ttk.Frame(body)
+        maps.pack(fill=tk.BOTH, expand=True)
+        maps.columnconfigure(0, weight=1, uniform="map")
+        maps.columnconfigure(1, weight=1, uniform="map")
+        maps.rowconfigure(2, weight=1)
 
-        right = ttk.LabelFrame(body, text="Uncovered Maps (all civilizations)")
-        body.add(right, weight=3)
+        ttk.Label(maps, text="Actual Labyrinth").grid(row=0, column=0, pady=(0, 4))
+        ttk.Label(maps, text="Uncovered Maps (all civilizations)").grid(
+            row=0, column=1, pady=(0, 4),
+        )
 
-        stats = ttk.Frame(right)
-        stats.pack(fill=tk.X, padx=4, pady=4)
+        ttk.Frame(maps).grid(row=1, column=0)
+
+        stats = ttk.Frame(maps)
+        stats.grid(row=1, column=1, sticky=tk.W, pady=(0, 4))
         for idx, state in enumerate(self._civ_states):
             palette = CIV_PALETTES[idx % len(CIV_PALETTES)]
             row = ttk.Frame(stats)
-            row.pack(fill=tk.X, pady=2)
+            row.pack(side=tk.LEFT, padx=(0, 16))
             ttk.Label(
                 row,
                 text="■",
@@ -77,15 +103,19 @@ class PlotTab(ttk.Frame):
             label.pack(side=tk.LEFT, padx=4)
             self._civ_stat_labels.append(label)
 
-        self._overlay_canvas = tk.Canvas(right, bg="#16213e", highlightthickness=0)
-        self._overlay_canvas.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._map_pair = _PairedMapCanvases(maps, actual_bg="#1a1a2e", overlay_bg="#16213e")
+        self._map_pair.grid(row=2, column=0, columnspan=2, sticky=tk.NSEW)
+        self._actual_canvas = self._map_pair.actual_canvas
+        self._overlay_canvas = self._map_pair.overlay_canvas
+        self._actual_canvas.bind("<Configure>", self._on_actual_canvas_resize)
         self._overlay_canvas.bind("<Configure>", self._on_overlay_canvas_resize)
 
-        legend = ttk.Frame(right)
-        legend.pack(fill=tk.X, padx=4, pady=(0, 4))
-        ttk.Label(legend, text="Overlay: each civ uses its own color; shared squares are split.").pack(
-            anchor=tk.W
-        )
+        legend = ttk.Frame(maps)
+        legend.grid(row=3, column=1, sticky=tk.W, pady=(4, 0))
+        ttk.Label(
+            legend,
+            text="Overlay: each civ uses its own color; shared squares are split.",
+        ).pack(anchor=tk.W)
 
         controls = ttk.Frame(self)
         controls.pack(fill=tk.X, padx=4, pady=4)
@@ -100,8 +130,14 @@ class PlotTab(ttk.Frame):
         self._reset_btn = ttk.Button(controls, text="Reset Simulation")
         self._reset_btn.pack(side=tk.LEFT)
 
+    def set_replay_mode(self, is_replay: bool) -> None:
+        """Switch the button label between 'Next Turn' and 'Replay Turn'."""
+        self._is_replay_mode = is_replay
+        label = "Replay Turn" if is_replay else "Next Turn"
+        self._next_btn.configure(text=label)
+
     def bind_next_turn(self, callback) -> None:
-        """Wire Next Turn button to game.next_turn()."""
+        """Wire Next/Replay Turn button to the given callback."""
         self._next_turn_callback = callback
         self._next_btn.configure(command=self._on_next_turn_clicked)
 
@@ -235,10 +271,10 @@ class PlotTab(ttk.Frame):
         canvas = self._actual_canvas
         canvas.delete("all")
         cell = self._cell_size(canvas)
-        colors = {"FIRE": "#e74c3c", "WATER": "#3498db", "EARTH": "#27ae60", "AIR": "#f1c40f"}
+        colors = {"FIRE": "#c0392b", "WATER": "#154360", "EARTH": "#7b4a1e", "AIR": "#aed6f1"}
         for (x, y), trap in self._labyrinth.grid.items():
             if trap is None:
-                color = "#2c3e50" if (x, y) in CENTER_SQUARES else "#1a1a2e"
+                color = "#ffffff" if (x, y) in CENTER_SQUARES else "#1a1a2e"
             else:
                 color = colors.get(trap.name, "#888")
             canvas.create_rectangle(

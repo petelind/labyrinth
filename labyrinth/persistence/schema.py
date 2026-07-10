@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS games (
     name         TEXT    NOT NULL DEFAULT 'game',
     turns_total  INTEGER NOT NULL,
     winner_civ   TEXT,
-    played_at    TEXT    NOT NULL
+    played_at    TEXT    NOT NULL,
+    seed         INTEGER NOT NULL DEFAULT 42
 );
 
 CREATE TABLE IF NOT EXISTS civilizations (
@@ -23,7 +24,9 @@ CREATE TABLE IF NOT EXISTS epochs (
     game_id       INTEGER NOT NULL REFERENCES games(id),
     dominant_type TEXT    NOT NULL,
     start_turn    INTEGER NOT NULL,
-    end_turn      INTEGER
+    end_turn      INTEGER,
+    epoch_length  INTEGER NOT NULL DEFAULT 0,
+    grid_json     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -98,4 +101,16 @@ def migrate(conn) -> None:
         conn.execute("ALTER TABLE civilizations ADD COLUMN status TEXT DEFAULT 'active'")
     if "extinct_turn" not in civ_columns:
         conn.execute("ALTER TABLE civilizations ADD COLUMN extinct_turn INTEGER")
+    game_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(games)").fetchall()
+    }
+    if "seed" not in game_columns:
+        conn.execute("ALTER TABLE games ADD COLUMN seed INTEGER NOT NULL DEFAULT 42")
+    epoch_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(epochs)").fetchall()
+    }
+    if "epoch_length" not in epoch_columns:
+        conn.execute("ALTER TABLE epochs ADD COLUMN epoch_length INTEGER NOT NULL DEFAULT 0")
+    if "grid_json" not in epoch_columns:
+        conn.execute("ALTER TABLE epochs ADD COLUMN grid_json TEXT")
     conn.commit()

@@ -37,6 +37,7 @@ class Strategy(ABC):
             weed_criteria=list(self.DEFAULT_ORDERS.weed_criteria),
             send_criteria=list(self.DEFAULT_ORDERS.send_criteria),
             reproduce_criteria=list(self.DEFAULT_ORDERS.reproduce_criteria),
+            routes=list(self.DEFAULT_ORDERS.routes),
             current_strategy_sumup=self.DEFAULT_ORDERS.current_strategy_sumup,
             last_updated_turn=self.DEFAULT_ORDERS.last_updated_turn,
         )
@@ -51,6 +52,7 @@ class Strategy(ABC):
                 weed_criteria=list(self._standing_orders.weed_criteria),
                 send_criteria=list(self._standing_orders.send_criteria),
                 reproduce_criteria=list(self._standing_orders.reproduce_criteria),
+                routes=list(self._standing_orders.routes),
                 current_strategy_sumup=self._standing_orders.current_strategy_sumup,
                 last_updated_turn=self._standing_orders.last_updated_turn,
             )
@@ -65,6 +67,7 @@ class Strategy(ABC):
                 weed=len(orders.weed_criteria),
                 send=len(orders.send_criteria),
                 reproduce=len(orders.reproduce_criteria),
+                routes=len(orders.routes),
             )
 
     def set_deadline(self, deadline: float) -> None:

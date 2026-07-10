@@ -48,9 +48,9 @@ class TestGame:
         summaries = game.next_turn()
         assert len(summaries) == 1
         assert summaries[0].turn_number == 1
-        assert game.civilizations[0].civilization.soma == 133
+        assert game.civilizations[0].civilization.soma == 157
         assert summaries[0].trips_sent == 64
-        assert summaries[0].trips_survived == 21
+        assert summaries[0].trips_survived == 5
         assert fired == ["turn_end"]
 
     def test_run_all_completes_all_turns(self, tmp_db: Path) -> None:

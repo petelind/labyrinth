@@ -102,7 +102,7 @@ class Game:
         repo = GameRepository(cfg.db_path) if cfg.db_path else None
         if repo:
             repo.initialize()
-            repo.create_game(cfg.turns_total, [s.civilization for s in states])
+            repo.create_game(cfg.turns_total, [s.civilization for s in states], seed=cfg.seed)
 
         game = cls(
             civilizations=states,
@@ -166,7 +166,10 @@ class Game:
         chapter_text = chronicler.flush()
         self.events.on_chapter(chapter_text)
 
-        self.labyrinth.tick_epoch()
+        if self.labyrinth.tick_epoch():
+            for state in self.civilizations:
+                state.civilization.known_map.clear()
+            log.info("epoch.known_maps_cleared", civilizations=len(self.civilizations))
 
         if self._repo:
             self._repo.save_turn(
@@ -174,6 +177,7 @@ class Game:
                 epoch,
                 turn_summaries,
                 self.civilizations,
+                labyrinth=self.labyrinth,
             )
 
         self.events.on_turn_end(turn_summaries)

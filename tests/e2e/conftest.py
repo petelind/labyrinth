@@ -88,6 +88,17 @@ class GuiHarness:
             timeout=timeout,
         )
 
+    def wait_until_finished(self, timeout: float = 30.0) -> None:
+        """Block until the game has ended (turns exhausted or all civs extinct)."""
+        poll_until(
+            lambda: (
+                self._app.game is not None
+                and (self._app.game.finished or self._app.game.current_turn >= self._app.game.turns_total)
+            ),
+            self._app,
+            timeout=timeout,
+        )
+
 
 @pytest.fixture
 def gui_app(tmp_path):
@@ -112,3 +123,27 @@ def gui_app(tmp_path):
 def harness(gui_app: LabyrinthApp) -> GuiHarness:
     """GuiHarness bound to the E2E app fixture."""
     return GuiHarness(gui_app)
+
+
+@pytest.fixture
+def gui_app_ten_turn(tmp_path):
+    """
+    GenAlg-only app seeded for a stable 10-turn auto-advance run.
+
+    Seed 16 completes all 10 turns; seed 42 ends early via extinction.
+    """
+    from labyrinth.gui.app import LabyrinthApp
+
+    db_path = tmp_path / "test.db"
+    app = LabyrinthApp(test_mode=True, db_path=db_path, game_seed=16)
+    yield app
+    try:
+        app.destroy()
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def harness_ten_turn(gui_app_ten_turn: LabyrinthApp) -> GuiHarness:
+    """GuiHarness bound to the 10-turn E2E app fixture."""
+    return GuiHarness(gui_app_ten_turn)

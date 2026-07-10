@@ -74,6 +74,21 @@ class Epoch:
     length: int
 
 
+@dataclass(frozen=True)
+class Route:
+    """
+    Criteria-mapped path for labyrinth trips.
+
+    First matching route wins when resolving send pool members.
+
+    :param criteria: AND-ed filter rules; must be non-empty.
+    :param path: Validated cardinal path starting on the perimeter.
+    """
+
+    criteria: tuple[Criterion, ...]
+    path: tuple[tuple[int, int], ...]
+
+
 @dataclass
 class StandingOrders:
     """
@@ -86,6 +101,7 @@ class StandingOrders:
     weed_criteria: list[Criterion] = field(default_factory=list)
     send_criteria: list[Criterion] = field(default_factory=list)
     reproduce_criteria: list[Criterion] = field(default_factory=list)
+    routes: list[Route] = field(default_factory=list)
     current_strategy_sumup: str = ""
     last_updated_turn: int = -1
 

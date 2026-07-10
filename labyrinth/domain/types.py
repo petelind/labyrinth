@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 
-TRIP_MAX_STEPS: int = 50
+TRIP_MAX_STEPS: int = 200
 LABYRINTH_SIZE: int = 100
 CENTER_SQUARES: frozenset[tuple[int, int]] = frozenset(
     {(49, 49), (49, 50), (50, 49), (50, 50)}

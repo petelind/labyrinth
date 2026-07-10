@@ -52,6 +52,22 @@ def _matches_criterion(raksha: Raksha, criterion: Criterion) -> bool:
     return _compare(actual, criterion.op, criterion.value)
 
 
+def matches_all_criteria(
+    raksha: Raksha,
+    criteria: tuple[Criterion, ...] | list[Criterion],
+) -> bool:
+    """
+    Return True when a living Raksha satisfies all criteria (AND logic).
+
+    :param raksha: Raksha to evaluate.
+    :param criteria: Filter rules to apply.
+    :return: True if alive and all criteria match.
+    """
+    if not raksha.alive:
+        return False
+    return all(_matches_criterion(raksha, c) for c in criteria)
+
+
 def resolve_criteria(
     criteria: list[Criterion],
     rakshas: list[Raksha],

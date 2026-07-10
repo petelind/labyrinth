@@ -8,6 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from labyrinth.persistence.repo import GameRepository
+
+
 @pytest.mark.gui
 def test_start_sets_turn_zero(gui_app, harness) -> None:
     """Starting simulation shows Turn 0 and creates a save file."""
@@ -43,6 +45,24 @@ def test_auto_advance_runs(gui_app, harness) -> None:
     harness.wait_until_idle()
     assert gui_app.game is not None
     assert gui_app.game.current_turn >= 3
+
+
+@pytest.mark.gui
+def test_auto_advance_ten_turns(gui_app_ten_turn, harness_ten_turn) -> None:
+    """Auto-advance runs a full 10-turn game and persists every turn."""
+    harness = harness_ten_turn
+    gui_app = gui_app_ten_turn
+    harness.start(turns=10)
+    harness.next_turn()
+    harness.wait_until_turn(1)
+    harness.wait_until_idle()
+    harness.enable_auto_advance()
+    harness.wait_until_finished(timeout=15)
+    harness.wait_until_idle()
+    assert gui_app.game is not None
+    assert gui_app.game.current_turn == 10
+    assert gui_app.save_path is not None
+    assert GameRepository(gui_app.save_path).turn_count() == 10
 
 
 @pytest.mark.gui

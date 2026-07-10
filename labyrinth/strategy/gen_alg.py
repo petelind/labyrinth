@@ -14,13 +14,66 @@ from labyrinth.domain.archetypes import (
     format_dna,
     raksha_matches_dna,
 )
-from labyrinth.domain.entities import DNA, Raksha, StandingOrders, TurnContext, Travelog
+from labyrinth.domain.entities import DNA, Raksha, Route, StandingOrders, TurnContext, Travelog
 from labyrinth.domain.types import Criterion, CriteriaField, CriteriaOp, GeneType
 from labyrinth.logging_config import get_logger
 from labyrinth.strategy.base import Strategy
 from labyrinth.strategy.empirical import per_gene_survival_rates, update_archetype_survival
 
 log = get_logger(__name__)
+
+_CENTER_ROW = 50
+_CENTER_COL = 50
+
+
+def _cardinal_path_to_center(
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> tuple[tuple[int, int], ...]:
+    """
+    Build a straight cardinal path from a perimeter start to a center square.
+
+    :param start: Perimeter entry coordinate.
+    :param end: Center target coordinate.
+    :return: Ordered path including start and end.
+    :raises ValueError: If start and end are not on the same row or column.
+    """
+    sx, sy = start
+    ex, ey = end
+    if sx == ex:
+        step = 1 if ey > sy else -1
+        coords = [(sx, y) for y in range(sy, ey + step, step)]
+    elif sy == ey:
+        step = 1 if ex > sx else -1
+        coords = [(x, sy) for x in range(sx, ex + step, step)]
+    else:
+        raise ValueError(f"Cardinal path requires shared row or column: {start} -> {end}")
+    return tuple(coords)
+
+
+def _build_cardinal_routes() -> list[Route]:
+    """
+    Return four dominant-gene routes: one straight path to center per cardinal edge.
+
+    FIRE→left, WATER→right, EARTH→top, AIR→bottom. All 16 secondary archetypes
+    per dominant gene share the same path during scout turns.
+    """
+    path_by_gene = {
+        GeneType.FIRE: _cardinal_path_to_center((0, _CENTER_ROW), (49, _CENTER_ROW)),
+        GeneType.WATER: _cardinal_path_to_center((99, _CENTER_ROW), (_CENTER_COL, _CENTER_ROW)),
+        GeneType.EARTH: _cardinal_path_to_center((_CENTER_COL, 0), (_CENTER_COL, 49)),
+        GeneType.AIR: _cardinal_path_to_center((_CENTER_COL, 99), (_CENTER_COL, _CENTER_ROW)),
+    }
+    return [
+        Route(
+            criteria=(Criterion(CriteriaField.GENE_DOMINANT, CriteriaOp.EQ, gene),),
+            path=path,
+        )
+        for gene, path in path_by_gene.items()
+    ]
+
+
+_CARDINAL_ROUTES: list[Route] = _build_cardinal_routes()
 
 
 class GenAlgStrategy(Strategy):
@@ -59,11 +112,14 @@ class GenAlgStrategy(Strategy):
 
         send = self._build_send_criteria(context)
         repro = self._build_repro_criteria(context)
+        scouting = self._needs_scout(context)
+        routes = list(_CARDINAL_ROUTES) if scouting else []
 
         self.set_standing_orders(StandingOrders(
             weed_criteria=[],
             send_criteria=send,
             reproduce_criteria=repro,
+            routes=routes,
             current_strategy_sumup=self._summarize(context, counts),
             last_updated_turn=context.turn_number,
         ))
@@ -513,14 +569,21 @@ class GenAlgStrategy(Strategy):
 
         if conservation:
             return "Conservation mode engaged — skipping scout."
+        cardinal_note = (
+            " Cardinal paths: FIRE←left, WATER→right, EARTH↑top, AIR↓bottom — "
+            "straight to center."
+        )
         if context.turn_number == 1:
-            return f"Turn 1 — launching full {ARCHETYPE_GRID_SIZE}-archetype scout."
+            return (
+                f"Turn 1 — launching full {ARCHETYPE_GRID_SIZE}-archetype scout."
+                f"{cardinal_note}"
+            )
         if not self._initial_scout_done:
-            return "Initial scout not yet completed — scouting now."
+            return f"Initial scout not yet completed — scouting now.{cardinal_note}"
         if context.recent_travelogs and survival < self.MASS_DEATH_THRESHOLD:
             return (
                 f"Mass death detected ({survival:.0%} < {self.MASS_DEATH_THRESHOLD:.0%})"
-                " — re-scouting for missing archetypes."
+                f" — re-scouting for missing archetypes.{cardinal_note}"
             )
         return "No mass death — switching to harvest mode."
 
