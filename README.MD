@@ -1012,3 +1012,45 @@ AlgoBot wins decisively. See earlier analysis — fallback orders compound fast.
 ## Experiment 4 — Wall-clock marathon
 
 AlgoBot wins by ~200,000× on turns. The soma difference will be astronomical. But the interesting number to watch is Qwen's per-turn efficiency — soma gathered per expedition sent. If Qwen is genuinely reasoning well, it should outperform AlgoBot's yield-per-trip even while losing catastrophically on total score. *This is mind-blowing if you think - you are _genuinely better_ in defining the strategy (and data proves it), but you loose to the basic-heuristic  dumb piece who just outpaces you.*
+
+---
+
+# Recommended Reading
+
+## Genetic Algorithms
+
+**[Chapter 9: Evolutionary Computing — The Nature of Code](https://natureofcode.com/genetic-algorithms/)** by Daniel Shiffman
+
+The clearest, most visual introduction to genetic algorithms available. Explains selection, crossover, and mutation through interactive p5.js examples. If you've ever wondered how AlgoBot's heuristics could themselves *evolve* rather than be hand-coded, this is the starting point. Free online.
+
+## Agent-Based Modeling
+
+**[Chapter 5: Autonomous Agents — The Nature of Code](https://natureofcode.com/autonomous-agents/)** by Daniel Shiffman
+
+Covers steering behaviours, flocking, and emergent group intelligence — the theoretical backbone behind why a civilization of individually-dumb Rakshas can still display interesting collective behaviour. Directly relevant to understanding why the "flies" in Lem's novel won. Free online.
+
+## Tkinter / TCL/TK
+
+**[tkinter — Python interface to Tcl/Tk](https://docs.python.org/3/library/tkinter.html)** — Official Python documentation
+
+The authoritative reference for everything the GUI in this project uses. Start with *"Tkinter life preserver"* and *"A Hello World program"* sections before diving into widget options.
+
+## What Simulations Can Do
+
+**[*Think Complexity* — Allen B. Downey](https://allendowney.github.io/ThinkComplexity/index.html)** (free, Creative Commons)
+
+The best single introduction to what simulations are actually for. Covers cellular automata, agent-based models, networks, evolution, and self-organizing systems — all with runnable Python and Jupyter notebooks. Chapter 9 on agent-based models implements *Sugarscape* — an artificial economy where agents wander a 2-D grid harvesting "sugar". If that sounds familiar, it's because this labyrinth is essentially Sugarscape with Rakshas and soma. Reading this chapter before extending the project will save you from reinventing 30 years of ABM literature.
+
+Manning has two relevant liveProjects:
+
+- **[How to Think About Simulating Nature](https://liveproject.manning.com/module/156_1_1/how-to-think-about-simulating-nature/introduction/prerequisite-quiz)** — The most directly relevant Manning offering. Covers the conceptual foundations of nature simulation: what a simulation *is*, how to think about agents, environments, and emergence before writing a single line of code. Start here if you want to extend this project seriously.
+
+- **[Swarms](https://www.manning.com/liveproject/swarms)** — Implements the Boids flocking algorithm and particle swarm optimization in Python. Relevant if you want Raksha civilizations to move as emergent flocks rather than independent agents.
+
+## The Invincible
+
+**[*Niezwyciężony* — Stanisław Lem (1964)](https://4etalka.ru/fantastika/nauchnaya_fantastika/188827.htm)**
+
+The novel that frames the central question of this simulation: does mechanical micro-evolution — fast, dumb, iterative — inevitably beat sophisticated intelligence in a survival competition? The swarm of "flies" on Regis III is AlgoBot. The *Niezwyciężony*'s crew is the LLM. Read it and decide who you're rooting for.
+
+> **Given your unique situation, folks — you can read the original Polish.** The link above hosts the full text *in Polish*, the language Lem wrote it in. No translation mediates between you and the argument. If you have not read Polish before, now is a fine time to start.
